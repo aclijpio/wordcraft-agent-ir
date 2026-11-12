@@ -1,0 +1,35 @@
+{
+  "page": { "w": 595.28, "h": 841.89 },
+  "margins": { "top": 56.7, "bottom": 56.7, "left": 85.05, "right": 42.55 },
+  "normal": {
+    "font": "Times New Roman",
+    "size": 14.0,
+    "align": "justify",
+    "lineSpacing": 1.5,
+    "indentFirst": 35.45,
+    "indentLeft": 0.0,
+    "indentRight": 0.0
+  },
+  "caption": {
+    "font": "Times New Roman",
+    "size": 14.0,
+    "figureAlign": "center",
+    "tableAlign": "left",
+    "indentFirst": 0.0,
+    "indentLeft": 0.0,
+    "lineSpacing": 1.5
+  },
+  "headings": {
+    "levels": 3,
+    "font": "Times New Roman",
+    "size": 14.0,
+    "bold": true,
+    "align": "left",
+    "indentFirst": 35.45,
+    "lineSpacing": 1.5,
+    "numbering": true,
+    "pageBreakOnHeading1": true
+  },
+  "clearStrayPageBreaks": true,
+  "normalizeCaptions": true
+}

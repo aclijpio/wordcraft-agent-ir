@@ -152,13 +152,14 @@ pub fn tool_definitions() -> Value {
         tool(
             "get_ir",
             "Document IR",
-            "Agent IR (v1): slim body blocks with style, text, align, indentFirst, lineSpacing, pageBreakBefore, numbering; plus pages and section margins. Optional from/to, fields[], pageBreaksOnly.",
+            "Agent IR v2: body blocks (paragraph/table/picture) with style, text, indents, role, pictures[]; plus pages and section margins. Optional from/to, fields[], pageBreaksOnly, kinds[].",
             with_doc(obj(
                 json!({
                     "from": n("First body index (inclusive)"),
                     "to": n("Last body index (inclusive)"),
                     "fields": {"type": "array", "items": {"type": "string"}, "description": "Keep only these block keys (index and type always kept)"},
-                    "pageBreaksOnly": {"type": "boolean", "description": "Only paragraphs with pageBreakBefore or a Heading* style"}
+                    "pageBreaksOnly": {"type": "boolean", "description": "Only paragraphs with pageBreakBefore or a Heading* style"},
+                    "kinds": {"type": "array", "items": {"type": "string"}, "description": "paragraph|table|picture"}
                 }),
                 &[]
             )),
@@ -167,7 +168,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "apply_ir_patch",
             "Apply IR patch",
-            "Patch body paragraphs by index: ops[{op:\"update\"|\"replace\"|\"replaceIn\", index, set?|block?|find+with}]. replaceIn edits a word/sentence inside a paragraph without rewriting the whole text. One undo.",
+            "Patch by body index: update|replace|replaceIn|insert|delete|move|setStyle|setCell. replaceIn edits a word/sentence; insert/delete/move change structure; setCell edits table cells. One undo.",
             with_doc(obj(
                 json!({
                     "ops": {
@@ -176,15 +177,21 @@ pub fn tool_definitions() -> Value {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "op": s("update|replace|replaceIn"),
+                                "op": s("update|replace|replaceIn|insert|delete|move|setStyle|setCell"),
                                 "index": n("Body block index from get_ir"),
-                                "set": {"type": "object", "description": "Fields to merge (style, text, align, indentFirst, indentLeft, indentRight, lineSpacing, pageBreakBefore, listLevel, numbering, replaceIn)"},
-                                "block": {"type": "object", "description": "Full paragraph block for replace"},
+                                "from": n("move source index"),
+                                "to": n("move destination index"),
+                                "row": n("setCell row"),
+                                "col": n("setCell column"),
+                                "style": s("setStyle / table style name"),
+                                "set": {"type": "object", "description": "Fields to merge"},
+                                "block": {"type": "object", "description": "Paragraph or table block for insert/replace"},
                                 "find": s("Substring for replaceIn"),
                                 "with": s("Replacement for replaceIn"),
-                                "occurrence": n("1-based match for replaceIn (default 1)")
+                                "occurrence": n("1-based match for replaceIn (default 1)"),
+                                "text": s("setCell text")
                             },
-                            "required": ["op", "index"]
+                            "required": ["op"]
                         }
                     }
                 }),
@@ -193,17 +200,31 @@ pub fn tool_definitions() -> Value {
             false
         ),
         tool(
+            "apply_layout",
+            "Apply layout profile",
+            "Generic page/margins/Normal/Caption/Heading profile. Omit profile for built-in default (A4, Calibri 11). Thesis rules belong in a local profile JSON, not in the engine.",
+            with_doc(obj(json!({"profile": {"type": "object", "description": "Layout profile"}, "clearStrayPageBreaks": {"type": "boolean"}}), &[])),
+            false
+        ),
+        tool(
+            "ensure_styles",
+            "Ensure styles",
+            "Upsert paragraph styles: styles[{id, basedOn?, name?, para?, chr?}].",
+            with_doc(obj(json!({"styles": {"type": "array", "items": {"type": "object"}}}), &["styles"])),
+            false
+        ),
+        tool(
             "apply_body_style",
             "Apply body style",
-            "A4, margins 30/15/20/20 mm, Normal = Times New Roman 14, 1.5 spacing, justify, first-line indent 35.45 pt; clears pageBreakBefore on non-Heading1 paragraphs.",
-            with_doc(obj(json!({}), &[])),
+            "Alias of apply_layout with optional profile (default neutral A4/Calibri).",
+            with_doc(obj(json!({"profile": {"type": "object"}}), &[])),
             false
         ),
         tool(
             "ensure_heading",
             "Ensure heading styles",
-            "Heading 1–N: TNR 14 bold black, 1.5, first-line indent; multilevel %1 / %1.%2 / …; pageBreakBefore only on Heading1.",
-            with_doc(obj(json!({"levels": n("1-9 heading levels to style (default 3)")}), &[])),
+            "Heading 1–N with optional numbering, font, size, indentFirst.",
+            with_doc(obj(json!({"levels": n("1-9"), "numbering": {"type": "boolean"}, "font": s("Font"), "size": n("pt"), "indentFirst": n("pt")}), &[])),
             false
         ),
         tool(
@@ -214,12 +235,81 @@ pub fn tool_definitions() -> Value {
             false
         ),
         tool(
-            "apply_vkr_layout",
-            "Apply VKR layout",
-            "One undo: clear stray pageBreakBefore, apply body style, ensure headings, normalize figure/table captions (center/left, no first-line indent, no leftover left indent). Prefer for first-pass thesis formatting; live MCP updates the open window.",
-            with_doc(obj(json!({"levels": n("1-9 heading levels (default 3)")}), &[])),
+            "insert_figure",
+            "Insert figure",
+            "Insert a picture (path or base64 data) with optional caption/label/align. Optional body index for caret.",
+            with_doc(obj(
+                json!({
+                    "path": s("Image file path"),
+                    "data": s("Base64 image bytes"),
+                    "width": n("Width pt"),
+                    "alt": s("Alt text"),
+                    "caption": s("Caption title text"),
+                    "captionLabel": s("Figure|Table|…"),
+                    "position": s("below|above"),
+                    "align": s("center|left|right"),
+                    "index": n("Body paragraph index")
+                }),
+                &[]
+            )),
             false
         ),
+        tool(
+            "insert_caption",
+            "Insert caption",
+            "Insert a caption at the caret (or body index).",
+            with_doc(obj(
+                json!({
+                    "label": s("Figure|Table|…"),
+                    "text": s("Caption text"),
+                    "position": s("below|above"),
+                    "format": s("ARABIC|…"),
+                    "separator": s("Separator"),
+                    "index": n("Body index")
+                }),
+                &[]
+            )),
+            false
+        ),
+        tool(
+            "insert_toc",
+            "Insert table of contents",
+            "Insert or refresh a TOC field (levels, title, pageNumbers, …).",
+            with_doc(obj(
+                json!({
+                    "levels": n("1-9"),
+                    "title": s("TOC title"),
+                    "pageNumbers": {"type": "boolean"},
+                    "rightAlign": {"type": "boolean"},
+                    "tabLeader": s("dot|…"),
+                    "hyperlinks": {"type": "boolean"}
+                }),
+                &[]
+            )),
+            false
+        ),
+        tool(
+            "update_toc",
+            "Update TOC",
+            "Refresh the table of contents field.",
+            with_doc(obj(json!({}), &[])),
+            false
+        ),
+        tool(
+            "update_fields",
+            "Update fields",
+            "Update document fields (all?: true).",
+            with_doc(obj(json!({"all": {"type": "boolean"}}), &[])),
+            false
+        ),
+        tool(
+            "insert_cross_ref",
+            "Insert cross-reference",
+            "Insert a cross-reference (to, target, show).",
+            with_doc(obj(json!({"to": s("figure|table|heading|…"), "target": s("Target"), "show": s("What to show")}), &[])),
+            false
+        ),
+
         tool(
             "render_page",
             "Render page",
@@ -230,7 +320,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "list_documents",
             "Open documents",
-            "The open documents in the order they were opened: id, title, path, dirty (unsaved changes) and active (the one commands work on by default). new_document and open_document open another document beside these. Give a document's id as `doc` to execute, batch, type_text, select_text, get_text, inspect_document, get_ir, apply_ir_patch, apply_body_style, ensure_heading, clear_stray_page_breaks, apply_vkr_layout, render_page or save_document to work on it while it stays in the background; execute view.switchWindows {id} makes it the active one, file.closeDocument {id, force?} closes it.",
+            "The open documents in the order they were opened: id, title, path, dirty (unsaved changes) and active (the one commands work on by default). new_document and open_document open another document beside these. Give a document's id as `doc` to execute, batch, type_text, select_text, get_text, inspect_document, get_ir, apply_ir_patch, apply_layout, ensure_styles, insert_figure, insert_toc, render_page or save_document to work on it while it stays in the background; execute view.switchWindows {id} makes it the active one, file.closeDocument {id, force?} closes it.",
             obj(json!({}), &[]),
             true
         ),
@@ -398,7 +488,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "inspect_document" => wrap(b.call("document.inspect", addressed(json!({}), doc))),
         "get_ir" => {
             let mut params = json!({});
-            for k in ["from", "to", "fields", "pageBreaksOnly"] {
+            for k in ["from", "to", "fields", "pageBreaksOnly", "kinds"] {
                 if let Some(x) = a.get(k) {
                     params[k] = x.clone();
                 }
@@ -409,22 +499,43 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
             Some(ops) => wrap(exec(b, "doc.applyIrPatch", json!({"ops": ops}), doc)),
             None => ToolResult::error("missing `ops`"),
         },
-        "apply_body_style" => wrap(exec(b, "doc.applyBodyStyle", json!({}), doc)),
+        "apply_layout" => {
+            let mut params = json!({});
+            if let Some(profile) = a.get("profile") {
+                params["profile"] = profile.clone();
+            }
+            if let Some(c) = a.get("clearStrayPageBreaks") {
+                params["clearStrayPageBreaks"] = c.clone();
+            }
+            wrap(exec(b, "doc.applyLayout", params, doc))
+        }
+        "ensure_styles" => match a.get("styles") {
+            Some(styles) => wrap(exec(b, "doc.ensureStyles", json!({"styles": styles}), doc)),
+            None => ToolResult::error("missing `styles`"),
+        },
+        "apply_body_style" => {
+            let mut params = json!({});
+            if let Some(profile) = a.get("profile") {
+                params["profile"] = profile.clone();
+            }
+            wrap(exec(b, "doc.applyBodyStyle", params, doc))
+        }
         "ensure_heading" => {
             let mut params = json!({});
-            if let Some(levels) = a.get("levels") {
-                params["levels"] = levels.clone();
+            for k in ["levels", "numbering", "font", "size", "indentFirst", "bold", "align"] {
+                if let Some(x) = a.get(k) {
+                    params[k] = x.clone();
+                }
             }
             wrap(exec(b, "doc.ensureHeading", params, doc))
         }
         "clear_stray_page_breaks" => wrap(exec(b, "doc.clearStrayPageBreaks", json!({}), doc)),
-        "apply_vkr_layout" => {
-            let mut params = json!({});
-            if let Some(levels) = a.get("levels") {
-                params["levels"] = levels.clone();
-            }
-            wrap(exec(b, "doc.applyVkrLayout", params, doc))
-        }
+        "insert_figure" => wrap(exec(b, "doc.insertFigure", a.clone(), doc)),
+        "insert_caption" => wrap(exec(b, "doc.insertCaption", a.clone(), doc)),
+        "insert_toc" => wrap(exec(b, "doc.insertToc", a.clone(), doc)),
+        "update_toc" => wrap(exec(b, "doc.updateToc", a.clone(), doc)),
+        "update_fields" => wrap(exec(b, "doc.updateFields", a.clone(), doc)),
+        "insert_cross_ref" => wrap(exec(b, "doc.insertCrossRef", a.clone(), doc)),
         "parity" => wrap(b.call("ui.parity", json!({}))),
         // Pictures travel inside the reply (`png`), headless or through the app: no file with a
         // predictable name in the shared temporary folder.

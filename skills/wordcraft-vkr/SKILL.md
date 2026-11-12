@@ -1,45 +1,31 @@
 ---
 name: wordcraft-vkr
-description: Edit VKR (thesis) documents in WordCraft via agent IR and high-level MCP tools. Use when formatting or revising a ВКР, applying методичка layout, fixing pageBreakBefore sprawl, or numbering headings 1 / 1.1.
+description: Format VKR (thesis) documents via generic WordCraft Agent IR + a local layout profile. Use for ВКР layout, captions, headings 1 / 1.1 — not engine-specific VKR commands.
 ---
 
-# WordCraft VKR
+# WordCraft VKR (profile on generic IR)
+
+VKR is a **scenario**, not an engine feature. Use generic MCP tools with a local profile.
 
 ## Always
 
-1. Read the local VKR rules file (e.g. `ВКР-правила-письма.md`) before layout or style edits.
-2. **Prefer `wordcraft-live`** (app with `--control`). Edits hit the open window — no reopen to preview.
-3. Prefer high-level tools over low-level `execute`:
-   - `apply_vkr_layout` — one shot: body/margins, headings, captions (Рисунок/Таблица without first-line/left indent leak)
-   - `get_ir` — structure (`role`, `indentLeft`/`indentFirst`); use `pageBreaksOnly` / `from`+`to` / `fields`
-   - `apply_ir_patch` — paragraph updates; for a word/sentence use `op:"replaceIn"` with `find`/`with`/`occurrence` (do not rewrite whole `text`)
-   - `apply_body_style` / `ensure_heading` / `clear_stray_page_breaks` — when not using the one-shot
-4. Use low-level `execute` only as fallback (tables, TOC, pictures, missing IR field).
-5. Work on a **copy** of the thesis `.docx`, never the only original.
-6. Never invent `.mjs`/`.ps1` bridges when live MCP can talk to the app.
+1. Read local VKR rules (e.g. `ВКР-правила-письма.md`).
+2. Prefer `wordcraft-live` (app `--control`).
+3. Load thesis layout via `apply_layout` with profile from this skill folder (`profile.json`), not `apply_vkr_layout` (removed).
+4. Prefer high-level tools: `get_ir`, `apply_ir_patch` (`replaceIn` for words), `insert_figure`, `insert_toc`, `apply_layout`, `ensure_heading`.
+5. Work on a **copy** of the `.docx`.
 
-## Hard rules
+## Profile
 
-- Never leave `pageBreakBefore: true` on Normal / body paragraphs.
-- `pageBreakBefore` only for Heading1 section starts (ВВЕДЕНИЕ, 1 …, ЗАКЛЮЧЕНИЕ, СПИСОК…, ПРИЛОЖЕНИЕ…).
-- Heading2/3 do **not** start a new page.
-- First-line indent ≈ 35.45 pt — not spaces or Tab.
-- Body: Times New Roman 14, line spacing 1.5 (multiple), justify; bold mainly in headings.
+See `profile.json` next to this skill (margins 30/15/20/20 mm, TNR 14, first-line 35.45, caption rules). Call:
 
-## Typical sequence (live)
+```json
+{"profile": { …contents of profile.json… }}
+```
 
-1. App from this fork with `doc.*` (`wordcraft.exe --control 17991`), MCP `wordcraft-live` connected to the same port and `WORDCRAFT_PROFILE_DIR`.
-2. `list_documents` — if the copy is not open: `open_document` on the copy path.
-3. `get_ir` with `pageBreaksOnly: true` — note `pages` and stray breaks.
-4. `apply_vkr_layout` (or the three separate tools).
-5. Fix headings / text with `apply_ir_patch` / `type_text` as needed.
-6. `get_ir` / `render_page` / `screenshot` — verify in the **same** window; do not ask the user to reopen.
-7. `save_document` when done.
+via MCP `apply_layout`.
 
-## MCP backends
+## Captions / figures
 
-- **Default:** `wordcraft-live` — live session in the open app.
-- **Headless `wordcraft`:** offline batch / CI only.
-- ArtCraft MSI may lag this fork — if `doc.*` is unknown, use the release `wordcraft-cli.exe` / built `wordcraft.exe` from this repository.
-
-Details: [docs/agent-ir.md](../../docs/agent-ir.md) and [packaging/agent-ir/README.md](../../packaging/agent-ir/README.md).
+- `insert_figure` with `caption` / `captionLabel: "Рисунок"` (or English `Figure`).
+- After layout, captions should be Caption style, centered, no first-line indent.

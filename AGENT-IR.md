@@ -1,21 +1,22 @@
 # WordCraft Agent IR
 
-This repository is a fork of [storytold/wordcraft](https://github.com/storytold/wordcraft) with an **agent IR** layer: structural document patches and high-level VKR layout commands over MCP/CLI.
+Fork of [storytold/wordcraft](https://github.com/storytold/wordcraft) with a **generic Agent IR** layer: layout profiles, structural patches, figures, TOC, tables, and templates over MCP/CLI.
 
 ## Features
 
-- `doc.getIr` / MCP `get_ir` — slim IR (`from`/`to`/`fields`/`pageBreaksOnly`)
-- `doc.applyIrPatch` / `apply_ir_patch` — update/replace paragraphs by body index
-- `doc.applyBodyStyle`, `doc.ensureHeading`, `doc.clearStrayPageBreaks`
-- `doc.applyVkrLayout` / `apply_vkr_layout` — one-shot thesis layout
-- Cursor skill: [`skills/wordcraft-vkr`](skills/wordcraft-vkr)
-- Docs: [`docs/agent-ir.md`](docs/agent-ir.md)
-- Windows release pack notes: [`packaging/agent-ir/README.md`](packaging/agent-ir/README.md)
+- `doc.getIr` (v2) / MCP `get_ir`
+- `doc.applyIrPatch` — update / replaceIn / insert / delete / move / setStyle / setCell
+- `doc.applyLayout` / `ensureStyles` / `ensureHeading`
+- `doc.insertFigure`, `insertToc`, `updateFields`, `insertCrossRef`, …
+- Cursor-oriented docs: [`docs/agent-ir.md`](docs/agent-ir.md)
+- Windows pack: [`packaging/agent-ir/README.md`](packaging/agent-ir/README.md)
+
+Domain rules (e.g. thesis layout) belong in a **local skill + profile JSON** that calls `apply_layout`, not in the engine.
 
 ## Download
 
-See [GitHub Releases](https://github.com/aclijpio/wordcraft-agent-ir/releases) for a Windows zip with `wordcraft-cli.exe` and examples.
+[GitHub Releases](https://github.com/aclijpio/wordcraft-agent-ir/releases)
 
-## Upstream
+## Licence
 
-WordCraft remains MIT OR Apache-2.0. Agent IR changes are additive; ordinary MCP tools stay compatible.
+Upstream WordCraft: MIT OR Apache-2.0. Agent IR changes are additive.

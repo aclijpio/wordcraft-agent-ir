@@ -1,0 +1,16 @@
+{
+  "template": "blank",
+  "commands": [
+    {"command": "doc.applyLayout", "params": {}},
+    {"command": "doc.applyIrPatch", "params": {"ops": [
+      {"op": "update", "index": 0, "set": {"text": "Agent IR smoke", "style": "Heading1"}},
+      {"op": "insert", "block": {"type": "paragraph", "text": "Body paragraph with a marker WORD.", "style": "Normal"}},
+      {"op": "replaceIn", "index": 1, "find": "WORD", "with": "token"},
+      {"op": "insert", "block": {"type": "table", "rows": 2, "cols": 2, "cells": [["A", "B"], ["C", "D"]]}},
+      {"op": "setCell", "index": 2, "row": 0, "col": 1, "text": "Beta"}
+    ]}},
+    {"command": "doc.ensureHeading", "params": {"levels": 2, "numbering": false}},
+    {"command": "doc.getIr", "params": {}}
+  ],
+  "save": ["smoke-out.docx"]
+}

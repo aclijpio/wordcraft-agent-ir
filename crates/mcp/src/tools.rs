@@ -167,7 +167,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "apply_ir_patch",
             "Apply IR patch",
-            "Patch body paragraphs by index: ops[{op:\"update\"|\"replace\", index, set?|block?}]. One undo. Prefer this over many low-level execute calls.",
+            "Patch body paragraphs by index: ops[{op:\"update\"|\"replace\"|\"replaceIn\", index, set?|block?|find+with}]. replaceIn edits a word/sentence inside a paragraph without rewriting the whole text. One undo.",
             with_doc(obj(
                 json!({
                     "ops": {
@@ -176,10 +176,13 @@ pub fn tool_definitions() -> Value {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "op": s("update|replace"),
+                                "op": s("update|replace|replaceIn"),
                                 "index": n("Body block index from get_ir"),
-                                "set": {"type": "object", "description": "Fields to merge (style, text, align, indentFirst, lineSpacing, pageBreakBefore, listLevel, numbering)"},
-                                "block": {"type": "object", "description": "Full paragraph block for replace"}
+                                "set": {"type": "object", "description": "Fields to merge (style, text, align, indentFirst, indentLeft, indentRight, lineSpacing, pageBreakBefore, listLevel, numbering, replaceIn)"},
+                                "block": {"type": "object", "description": "Full paragraph block for replace"},
+                                "find": s("Substring for replaceIn"),
+                                "with": s("Replacement for replaceIn"),
+                                "occurrence": n("1-based match for replaceIn (default 1)")
                             },
                             "required": ["op", "index"]
                         }
@@ -213,7 +216,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "apply_vkr_layout",
             "Apply VKR layout",
-            "One undo: clear stray pageBreakBefore, apply body style (A4/margins/Normal), ensure Heading1–N with multilevel %1 / %1.%2. Prefer for first-pass thesis formatting; live MCP updates the open window.",
+            "One undo: clear stray pageBreakBefore, apply body style, ensure headings, normalize figure/table captions (center/left, no first-line indent, no leftover left indent). Prefer for first-pass thesis formatting; live MCP updates the open window.",
             with_doc(obj(json!({"levels": n("1-9 heading levels (default 3)")}), &[])),
             false
         ),

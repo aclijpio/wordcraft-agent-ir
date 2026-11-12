@@ -27,7 +27,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"from"?: n, "to"?: n, "fields"?: [string], "pageBreaksOnly"?: bool}"#)
             .pure(),
         CommandSpec::new("doc.applyIrPatch", "Apply IR Patch", "Agents", apply_ir_patch)
-            .params(r#"{"ops":[{"op":"update"|"replace","index":n,"set"?:{…},"block"?:{…}}]}"#),
+            .params(
+                r#"{"ops":[{"op":"update"|"replace"|"replaceIn","index":n,"set"?:{…},"block"?:{…},"find"?:string,"with"?:string,"occurrence"?:n}]}"#,
+            ),
         CommandSpec::new("doc.applyBodyStyle", "Apply Body Style", "Agents", apply_body_style)
             .params(r#"{}"#),
         CommandSpec::new("doc.ensureHeading", "Ensure Heading Styles", "Agents", ensure_heading)
@@ -75,11 +77,12 @@ fn build_ir(s: &mut Session, filter: &IrFilter) -> Value {
                 if filter.page_breaks_only && !page_break_before && !is_heading {
                     continue;
                 }
+                let text = p.plain_text();
                 let mut o = json!({
                     "index": i,
                     "type": "paragraph",
                     "style": style,
-                    "text": p.plain_text(),
+                    "text": text,
                     "align": match resolved.align {
                         Align::Center => "center",
                         Align::Right => "right",
@@ -88,8 +91,17 @@ fn build_ir(s: &mut Session, filter: &IrFilter) -> Value {
                         Align::Left => "left",
                     },
                     "indentFirst": resolved.indent_first,
+                    "indentLeft": resolved.indent_left,
+                    "indentRight": resolved.indent_right,
                     "pageBreakBefore": page_break_before,
                 });
+                if is_figure_caption(&text) {
+                    o["role"] = json!("figureCaption");
+                } else if is_table_caption(&text) {
+                    o["role"] = json!("tableCaption");
+                } else if is_heading1(s, &p.props) || style.starts_with("Heading") {
+                    o["role"] = json!("heading");
+                }
                 match p.props.line_spacing.unwrap_or(resolved.line_spacing) {
                     LineSpacing::Multiple(v) => o["lineSpacing"] = json!(v),
                     other => o["lineSpacing"] = serde_json::to_value(other).unwrap_or(Value::Null),
@@ -193,6 +205,13 @@ fn apply_ir_patch(s: &mut Session, v: &Value) -> CmdResult {
                 apply_replace(s, index, block)?;
                 changed = changed.saturating_add(1);
             }
+            "replaceIn" => {
+                let find = p::str(op, "find").ok_or_else(|| CmdError::Params(format!("ops[{i}]: replaceIn needs `find`")))?;
+                let with = p::str(op, "with").ok_or_else(|| CmdError::Params(format!("ops[{i}]: replaceIn needs `with`")))?;
+                let occurrence = p::u64(op, "occurrence").unwrap_or(1).max(1) as usize;
+                replace_in_paragraph(s, index, find, with, occurrence)?;
+                changed = changed.saturating_add(1);
+            }
             other => return Err(CmdError::Params(format!("ops[{i}]: unknown op `{other}`"))),
         }
     }
@@ -205,10 +224,11 @@ fn apply_ir_patch(s: &mut Session, v: &Value) -> CmdResult {
 
 fn apply_update(s: &mut Session, index: usize, set: &Value) -> Result<(), CmdError> {
     let path = Path::top(index);
-    let Some(para) = s.doc.para(StoryRef::Body, &path) else {
+    if s.doc.para(StoryRef::Body, &path).is_none() {
         return Err(CmdError::Params(format!("block {index} is not a paragraph")));
-    };
+    }
     if let Some(text) = p::str(set, "text") {
+        let para = s.doc.para(StoryRef::Body, &path).ok_or_else(|| CmdError::Params(format!("block {index} is not a paragraph")))?;
         let mark = para.mark.clone();
         let props = para.props.clone();
         let section = para.section.clone();
@@ -224,6 +244,12 @@ fn apply_update(s: &mut Session, index: usize, set: &Value) -> Result<(), CmdErr
         para.section = section;
         para.touch();
     }
+    if let Some(ri) = set.get("replaceIn") {
+        let find = p::str(ri, "find").ok_or_else(|| CmdError::Params("set.replaceIn.find required".into()))?;
+        let with = p::str(ri, "with").ok_or_else(|| CmdError::Params("set.replaceIn.with required".into()))?;
+        let occurrence = p::u64(ri, "occurrence").unwrap_or(1).max(1) as usize;
+        replace_in_paragraph(s, index, find, with, occurrence)?;
+    }
     let para = s.doc.para_mut(StoryRef::Body, &path)?;
     if let Some(style) = p::str(set, "style") {
         para.props.style = Some(style.to_string());
@@ -235,6 +261,14 @@ fn apply_update(s: &mut Session, index: usize, set: &Value) -> Result<(), CmdErr
     if let Some(f) = p::f32(set, "indentFirst") {
         para.props.indent_first = Some(f.clamp(-1584.0, 1584.0));
         para.props.cancel_char_indents(false, false, true);
+    }
+    if let Some(f) = p::f32(set, "indentLeft") {
+        para.props.indent_left = Some(f.clamp(0.0, 1584.0));
+        para.props.cancel_char_indents(true, false, false);
+    }
+    if let Some(f) = p::f32(set, "indentRight") {
+        para.props.indent_right = Some(f.clamp(0.0, 1584.0));
+        para.props.cancel_char_indents(false, true, false);
     }
     if let Some(v) = p::f32(set, "lineSpacing") {
         para.props.line_spacing = Some(LineSpacing::Multiple(v.clamp(0.0, 132.0)));
@@ -260,6 +294,62 @@ fn apply_update(s: &mut Session, index: usize, set: &Value) -> Result<(), CmdErr
     }
     para.touch();
     Ok(())
+}
+
+fn replace_in_paragraph(s: &mut Session, index: usize, find: &str, with: &str, occurrence: usize) -> Result<(), CmdError> {
+    if find.is_empty() {
+        return Err(CmdError::Params("`find` must not be empty".into()));
+    }
+    if with.contains('\u{FFFC}') {
+        return Err(CmdError::Params("`with` must not contain object placeholders".into()));
+    }
+    let path = Path::top(index);
+    let Some(para) = s.doc.para(StoryRef::Body, &path) else {
+        return Err(CmdError::Params(format!("block {index} is not a paragraph")));
+    };
+    let text = para.plain_text();
+    let start = find_nth(&text, find, occurrence).ok_or_else(|| {
+        CmdError::Params(format!("occurrence {occurrence} of `find` not in paragraph {index}"))
+    })?;
+    let end = start.saturating_add(find.len());
+    if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+        return Err(CmdError::Params("replace range is not on a char boundary".into()));
+    }
+    let mark = para.props_at(start).clone();
+    let para = s.doc.para_mut(StoryRef::Body, &path)?;
+    para.delete(start, end).map_err(|e| CmdError::Failed(e.to_string()))?;
+    if !with.is_empty() {
+        para.insert_text(start, with, &mark).map_err(|e| CmdError::Failed(e.to_string()))?;
+    }
+    para.touch();
+    Ok(())
+}
+
+fn find_nth(haystack: &str, needle: &str, occurrence: usize) -> Option<usize> {
+    let mut from = 0usize;
+    let mut seen = 0usize;
+    while from <= haystack.len() {
+        let Some(rel) = haystack.get(from..)?.find(needle) else {
+            return None;
+        };
+        let at = from.saturating_add(rel);
+        seen = seen.saturating_add(1);
+        if seen == occurrence {
+            return Some(at);
+        }
+        from = at.saturating_add(needle.len().max(1));
+    }
+    None
+}
+
+fn is_figure_caption(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("Рисунок ") || t.starts_with("Рис. ")
+}
+
+fn is_table_caption(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("Таблица ") || t.starts_with("Табл. ")
 }
 
 fn apply_replace(s: &mut Session, index: usize, block: &Value) -> Result<(), CmdError> {
@@ -337,6 +427,8 @@ fn apply_body_style_inner(s: &mut Session) -> Result<u32, CmdError> {
     });
     st.para.overlay(&ParaProps {
         align: Some(Align::Justify),
+        indent_left: Some(0.0),
+        indent_right: Some(0.0),
         indent_first: Some(FIRST_LINE_PT),
         line_spacing: Some(LineSpacing::Multiple(1.5)),
         page_break_before: Some(false),
@@ -344,8 +436,87 @@ fn apply_body_style_inner(s: &mut Session) -> Result<u32, CmdError> {
         space_after: Some(0.0),
         ..ParaProps::default()
     });
+    ensure_caption_style(s)?;
     touch_all(s);
+    normalize_special_paras(s)?;
     clear_stray_inner(s)
+}
+
+fn ensure_caption_style(s: &mut Session) -> Result<(), CmdError> {
+    let id = "Caption".to_string();
+    if s.doc.styles.get(&id).is_none() {
+        if let Some(st) = wordcraft_doc::styles::StyleSheet::builtin().get(&id).cloned() {
+            Arc::make_mut(&mut s.doc.styles).upsert(st);
+        }
+    }
+    let st = Arc::make_mut(&mut s.doc.styles).get_mut(&id).ok_or_else(|| CmdError::Params("no Caption style".into()))?;
+    st.chr.overlay(&CharProps {
+        font: Some("Times New Roman".into()),
+        size: Some(14.0),
+        italic: Some(false),
+        bold: Some(false),
+        color: Some(TextColor::Rgb(Rgb::BLACK)),
+        ..CharProps::default()
+    });
+    st.para.overlay(&ParaProps {
+        align: Some(Align::Center),
+        indent_left: Some(0.0),
+        indent_right: Some(0.0),
+        indent_first: Some(0.0),
+        line_spacing: Some(LineSpacing::Multiple(1.5)),
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        page_break_before: Some(false),
+        ..ParaProps::default()
+    });
+    Ok(())
+}
+
+fn normalize_special_paras(s: &mut Session) -> Result<(), CmdError> {
+    for i in 0..s.doc.body.len() {
+        let path = Path::top(i);
+        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+        let text = p.plain_text();
+        let style = p.props.style.clone().unwrap_or_else(|| "Normal".into());
+        let heading = style.starts_with("Heading") || is_heading1(s, &p.props);
+        if is_figure_caption(&text) {
+            let para = s.doc.para_mut(StoryRef::Body, &path)?;
+            para.props.style = Some("Caption".into());
+            para.props.align = Some(Align::Center);
+            para.props.indent_left = Some(0.0);
+            para.props.indent_right = Some(0.0);
+            para.props.indent_first = Some(0.0);
+            para.props.numbering = Some(NumRef { num: 0, level: 0 });
+            para.props.cancel_char_indents(true, true, true);
+            para.touch();
+        } else if is_table_caption(&text) {
+            let para = s.doc.para_mut(StoryRef::Body, &path)?;
+            para.props.style = Some("Caption".into());
+            para.props.align = Some(Align::Left);
+            para.props.indent_left = Some(0.0);
+            para.props.indent_right = Some(0.0);
+            para.props.indent_first = Some(0.0);
+            para.props.numbering = Some(NumRef { num: 0, level: 0 });
+            para.props.cancel_char_indents(true, true, true);
+            para.touch();
+        } else if heading {
+            let para = s.doc.para_mut(StoryRef::Body, &path)?;
+            para.props.align = Some(Align::Left);
+            para.props.indent_left = None;
+            para.props.indent_right = None;
+            para.props.indent_first = None;
+            para.props.cancel_char_indents(true, true, true);
+            para.touch();
+        } else if style == "Normal" {
+            let para = s.doc.para_mut(StoryRef::Body, &path)?;
+            if para.props.indent_left.is_some_and(|v| v > 0.0) {
+                para.props.indent_left = Some(0.0);
+            }
+            para.props.cancel_char_indents(true, false, false);
+            para.touch();
+        }
+    }
+    Ok(())
 }
 
 fn ensure_heading(s: &mut Session, v: &Value) -> CmdResult {
@@ -363,6 +534,8 @@ fn ensure_heading_inner(s: &mut Session, levels: u8) -> Result<(), CmdError> {
     };
     let para_base = ParaProps {
         align: Some(Align::Left),
+        indent_left: Some(0.0),
+        indent_right: Some(0.0),
         indent_first: Some(FIRST_LINE_PT),
         line_spacing: Some(LineSpacing::Multiple(1.5)),
         space_before: Some(0.0),
@@ -383,14 +556,25 @@ fn ensure_heading_inner(s: &mut Session, levels: u8) -> Result<(), CmdError> {
     for i in 0..s.doc.body.len() {
         let path = Path::top(i);
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+        let style = p.props.style.clone().unwrap_or_default();
         let h1 = is_heading1(s, &p.props);
-        let want = if h1 { Some(true) } else if p.props.page_break_before == Some(true) { Some(false) } else { None };
-        if let Some(on) = want {
-            if p.props.page_break_before != Some(on) {
-                let para = s.doc.para_mut(StoryRef::Body, &path)?;
-                para.props.page_break_before = Some(on);
-                para.touch();
+        let heading = h1 || style.starts_with("Heading");
+        if heading {
+            let para = s.doc.para_mut(StoryRef::Body, &path)?;
+            para.props.align = Some(Align::Left);
+            para.props.indent_left = None;
+            para.props.indent_right = None;
+            para.props.indent_first = None;
+            para.props.cancel_char_indents(true, true, true);
+            let want_break = h1;
+            if para.props.page_break_before != Some(want_break) {
+                para.props.page_break_before = Some(want_break);
             }
+            para.touch();
+        } else if p.props.page_break_before == Some(true) {
+            let para = s.doc.para_mut(StoryRef::Body, &path)?;
+            para.props.page_break_before = Some(false);
+            para.touch();
         }
     }
     Ok(())
@@ -400,13 +584,13 @@ fn link_heading_numbering(s: &mut Session) -> Result<(), CmdError> {
     let levels: Vec<Level> = (0..crate::cmd::lists::LEVELS)
         .map(|i| {
             let n = i + 1;
-            let indent = 21.6 + 7.2 * i as f32;
             let text = (1..=n).map(|k| format!("%{k}")).collect::<Vec<_>>().join(".");
             Level {
                 format: NumFormat::Decimal,
                 text,
-                indent,
-                hanging: indent,
+                indent: FIRST_LINE_PT,
+                hanging: 0.0,
+                suffix: wordcraft_doc::numbering::LevelSuffix::Space,
                 style: Some(format!("Heading{n}")),
                 ..Level::default()
             }
@@ -465,10 +649,14 @@ fn apply_vkr_layout(s: &mut Session, v: &Value) -> CmdResult {
     let cleared = clear_stray_inner(s)?;
     let cleared_body = apply_body_style_inner(s)?;
     ensure_heading_inner(s, levels)?;
+    normalize_special_paras(s)?;
     let mut ir = full_ir(s);
     if let Some(o) = ir.as_object_mut() {
         o.insert("cleared".into(), json!(cleared.saturating_add(cleared_body)));
-        o.insert("applied".into(), json!(["clearStrayPageBreaks", "applyBodyStyle", "ensureHeading"]));
+        o.insert(
+            "applied".into(),
+            json!(["clearStrayPageBreaks", "applyBodyStyle", "ensureHeading", "normalizeCaptions"]),
+        );
     }
     Ok(ir)
 }
@@ -618,5 +806,52 @@ mod tests {
         assert_eq!(s.doc.styles.get("Heading1").unwrap().chr.bold, Some(true));
         assert_eq!(s.doc.para(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before, Some(false));
         assert_eq!(s.layout().pages.len(), 1);
+    }
+
+    #[test]
+    fn apply_vkr_layout_normalizes_captions_and_heading_indents() {
+        let mut d = Document::new();
+        d.body.clear();
+        let mut h2 = Paragraph::with_text("Поток", CharProps::default()).styled("Heading2");
+        h2.props.align = Some(Align::Justify);
+        h2.props.indent_left = Some(72.0);
+        d.body.push(Arc::new(Block::Para(h2)));
+        let mut cap = Paragraph::with_text("Рисунок 1.1 - Логическая архитектура веб-сервиса управления заявками", CharProps::default());
+        cap.props.align = Some(Align::Justify);
+        cap.props.indent_first = Some(FIRST_LINE_PT);
+        cap.props.indent_left = Some(40.0);
+        d.body.push(Arc::new(Block::Para(cap)));
+        let mut body = Paragraph::with_text("После рисунка текст", CharProps::default());
+        body.props.indent_left = Some(40.0);
+        d.body.push(Arc::new(Block::Para(body)));
+        let mut s = Session::new(d);
+        s.run("doc.applyVkrLayout", &json!({})).unwrap();
+        let cap = s.doc.para(StoryRef::Body, &Path::top(1)).unwrap();
+        assert_eq!(cap.props.style.as_deref(), Some("Caption"));
+        assert_eq!(cap.props.align, Some(Align::Center));
+        assert_eq!(cap.props.indent_first, Some(0.0));
+        assert_eq!(cap.props.indent_left, Some(0.0));
+        let h2 = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+        assert_eq!(h2.props.align, Some(Align::Left));
+        assert!(h2.props.indent_left.is_none());
+        let body = s.doc.para(StoryRef::Body, &Path::top(2)).unwrap();
+        assert_eq!(body.props.indent_left, Some(0.0));
+        let num = s.doc.styles.get("Heading2").unwrap().para.numbering.unwrap();
+        let lvl = s.doc.numbering.level(num.num, 1).unwrap();
+        assert!((lvl.indent - FIRST_LINE_PT).abs() < 0.01);
+        assert!((lvl.hanging - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn apply_ir_patch_replace_in_keeps_surrounding_text() {
+        let mut s = Session::new(Document::from_text("Сервис управления заявками в контуре"));
+        let r = s
+            .run(
+                "doc.applyIrPatch",
+                &json!({"ops":[{"op":"replaceIn","index":0,"find":"заявками","with":"заказами","occurrence":1}]}),
+            )
+            .unwrap();
+        assert_eq!(r["changed"], 1);
+        assert_eq!(r["blocks"][0]["text"], "Сервис управления заказами в контуре");
     }
 }

@@ -80,7 +80,17 @@ Block kinds: `paragraph`, `table` (cells as text only in v1). Patch identity is 
 }
 ```
 
-`replace` takes a full paragraph `block` (v1: paragraphs only). Reply is a fresh IR plus `changed`.
+`replace` takes a full paragraph `block` (v1: paragraphs only).
+
+Targeted word/sentence edit (keeps the rest of the paragraph):
+
+```json
+{"ops":[{"op":"replaceIn","index":17,"find":"заявками","with":"заказами","occurrence":1}]}
+```
+
+`update.set` may also include `indentLeft` / `indentRight` and `replaceIn`. Reply is a fresh IR plus `changed`. IR paragraphs may include `role` (`figureCaption` / `tableCaption` / `heading`).
+
+`doc.applyVkrLayout` normalizes captions (`Рисунок…` centered, no first-line indent; `Таблица…` left, no first-line indent) and clears leftover left indents on Normal/headings so text does not stay shifted right after figures.
 
 ## High-level commands / MCP tools
 

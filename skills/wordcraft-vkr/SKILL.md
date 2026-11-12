@@ -10,9 +10,9 @@ description: Edit VKR (thesis) documents in WordCraft via agent IR and high-leve
 1. Read the local VKR rules file (e.g. `ВКР-правила-письма.md`) before layout or style edits.
 2. **Prefer `wordcraft-live`** (app with `--control`). Edits hit the open window — no reopen to preview.
 3. Prefer high-level tools over low-level `execute`:
-   - `apply_vkr_layout` — one shot: clear stray page breaks + body style + heading styles/numbering
-   - `get_ir` — structure; for large docs use `pageBreaksOnly` / `from`+`to` / `fields`
-   - `apply_ir_patch` — targeted paragraph updates by `index`
+   - `apply_vkr_layout` — one shot: body/margins, headings, captions (Рисунок/Таблица without first-line/left indent leak)
+   - `get_ir` — structure (`role`, `indentLeft`/`indentFirst`); use `pageBreaksOnly` / `from`+`to` / `fields`
+   - `apply_ir_patch` — paragraph updates; for a word/sentence use `op:"replaceIn"` with `find`/`with`/`occurrence` (do not rewrite whole `text`)
    - `apply_body_style` / `ensure_heading` / `clear_stray_page_breaks` — when not using the one-shot
 4. Use low-level `execute` only as fallback (tables, TOC, pictures, missing IR field).
 5. Work on a **copy** of the thesis `.docx`, never the only original.

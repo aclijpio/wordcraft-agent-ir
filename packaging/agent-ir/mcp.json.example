@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "wordcraft": {
+      "command": "C:\\path\\to\\wordcraft-cli.exe",
+      "args": ["mcp"]
+    },
+    "wordcraft-live": {
+      "command": "C:\\path\\to\\wordcraft-cli.exe",
+      "args": ["mcp", "--connect", "127.0.0.1:17991"],
+      "env": {
+        "WORDCRAFT_PROFILE_DIR": "C:\\path\\to\\writable-profile"
+      }
+    }
+  }
+}

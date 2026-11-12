@@ -179,6 +179,12 @@ test source in File › Options › Language and on the bar's Install.
   control-channel or CLI call is held to it too) |
 | `select_text` | select the n-th occurrence of some text |
 | `get_text` / `inspect_document` | read the document back (verify without screenshots) |
+| `get_ir` | agent IR (slim inspect): styles, indents, pageBreakBefore, numbering, pages |
+| `apply_ir_patch` | patch paragraphs by body index (`ops`); one undo — prefer over many `execute`s |
+| `apply_body_style` | A4 + VKR-style Normal (TNR 14, 1.5, justify, first-line indent) and clear stray page breaks |
+| `ensure_heading` | Heading styles + multilevel `%1` / `%1.%2`; page break only on Heading1 |
+| `clear_stray_page_breaks` | clear `pageBreakBefore` except Heading1 |
+| `apply_vkr_layout` | one undo: clear stray breaks + body style + ensure headings |
 | `render_page` | a page as PNG |
 | `parity` | feature coverage |
 | `screenshot`, `click`, `key`, `ui_inspect` | app only (`--connect`) |
@@ -191,8 +197,11 @@ document beside the ones already open and make it the active one; their reply ca
 active again (`alreadyOpen`). `list_documents` lists the open documents with their ids.
 
 Tools work on the active document. `execute`, `batch`, `type_text`, `select_text`, `get_text`,
-`insert_table`, `inspect_document`, `render_page` and `save_document` also take `doc`, the id of another open
+`insert_table`, `inspect_document`, `get_ir`, `apply_ir_patch`, `apply_body_style`, `ensure_heading`,
+`clear_stray_page_breaks`, `apply_vkr_layout`, `render_page` and `save_document` also take `doc`, the id of another open
 document: the tool works on that document and the active one stays active.
+
+Structural edits for agents: [agent IR](agent-ir.md).
 
 ```json
 {"name": "execute", "arguments": {"command": "text.insert", "params": {"text": "Hello"}, "doc": 3}}

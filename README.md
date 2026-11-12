@@ -214,7 +214,8 @@ claude mcp add wordcraft-app -- wordcraft-cli mcp --connect 127.0.0.1:7981
 
 Tools include `list_commands`, `execute`, `batch`, `type_text`, `select_text`, `inspect_document`,
 `render_page`, `save_document`, and, with a running app, `screenshot`, `click` and `key`. Agents
-can check their work through `inspect_document` without screenshots. See [docs/mcp.md](docs/mcp.md)
+can check their work through `inspect_document` without screenshots. For structural patches and
+bulk body/heading style (IR), see [docs/agent-ir.md](docs/agent-ir.md). See [docs/mcp.md](docs/mcp.md)
 and the [control protocol](docs/control-protocol.md). Macros record any sequence of commands and
 play it back (`tools.recordMacro`, `tools.macros`).
 

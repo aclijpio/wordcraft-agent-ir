@@ -150,6 +150,74 @@ pub fn tool_definitions() -> Value {
             true
         ),
         tool(
+            "get_ir",
+            "Document IR",
+            "Agent IR (v1): slim body blocks with style, text, align, indentFirst, lineSpacing, pageBreakBefore, numbering; plus pages and section margins. Optional from/to, fields[], pageBreaksOnly.",
+            with_doc(obj(
+                json!({
+                    "from": n("First body index (inclusive)"),
+                    "to": n("Last body index (inclusive)"),
+                    "fields": {"type": "array", "items": {"type": "string"}, "description": "Keep only these block keys (index and type always kept)"},
+                    "pageBreaksOnly": {"type": "boolean", "description": "Only paragraphs with pageBreakBefore or a Heading* style"}
+                }),
+                &[]
+            )),
+            true
+        ),
+        tool(
+            "apply_ir_patch",
+            "Apply IR patch",
+            "Patch body paragraphs by index: ops[{op:\"update\"|\"replace\", index, set?|block?}]. One undo. Prefer this over many low-level execute calls.",
+            with_doc(obj(
+                json!({
+                    "ops": {
+                        "type": "array",
+                        "description": "Patch operations",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "op": s("update|replace"),
+                                "index": n("Body block index from get_ir"),
+                                "set": {"type": "object", "description": "Fields to merge (style, text, align, indentFirst, lineSpacing, pageBreakBefore, listLevel, numbering)"},
+                                "block": {"type": "object", "description": "Full paragraph block for replace"}
+                            },
+                            "required": ["op", "index"]
+                        }
+                    }
+                }),
+                &["ops"]
+            )),
+            false
+        ),
+        tool(
+            "apply_body_style",
+            "Apply body style",
+            "A4, margins 30/15/20/20 mm, Normal = Times New Roman 14, 1.5 spacing, justify, first-line indent 35.45 pt; clears pageBreakBefore on non-Heading1 paragraphs.",
+            with_doc(obj(json!({}), &[])),
+            false
+        ),
+        tool(
+            "ensure_heading",
+            "Ensure heading styles",
+            "Heading 1–N: TNR 14 bold black, 1.5, first-line indent; multilevel %1 / %1.%2 / …; pageBreakBefore only on Heading1.",
+            with_doc(obj(json!({"levels": n("1-9 heading levels to style (default 3)")}), &[])),
+            false
+        ),
+        tool(
+            "clear_stray_page_breaks",
+            "Clear stray page breaks",
+            "Clear direct pageBreakBefore on every body paragraph that is not Heading1.",
+            with_doc(obj(json!({}), &[])),
+            false
+        ),
+        tool(
+            "apply_vkr_layout",
+            "Apply VKR layout",
+            "One undo: clear stray pageBreakBefore, apply body style (A4/margins/Normal), ensure Heading1–N with multilevel %1 / %1.%2. Prefer for first-pass thesis formatting; live MCP updates the open window.",
+            with_doc(obj(json!({"levels": n("1-9 heading levels (default 3)")}), &[])),
+            false
+        ),
+        tool(
             "render_page",
             "Render page",
             "Render a page to PNG to look at the result.",
@@ -159,7 +227,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "list_documents",
             "Open documents",
-            "The open documents in the order they were opened: id, title, path, dirty (unsaved changes) and active (the one commands work on by default). new_document and open_document open another document beside these. Give a document's id as `doc` to execute, batch, type_text, select_text, get_text, inspect_document, render_page or save_document to work on it while it stays in the background; execute view.switchWindows {id} makes it the active one, file.closeDocument {id, force?} closes it.",
+            "The open documents in the order they were opened: id, title, path, dirty (unsaved changes) and active (the one commands work on by default). new_document and open_document open another document beside these. Give a document's id as `doc` to execute, batch, type_text, select_text, get_text, inspect_document, get_ir, apply_ir_patch, apply_body_style, ensure_heading, clear_stray_page_breaks, apply_vkr_layout, render_page or save_document to work on it while it stays in the background; execute view.switchWindows {id} makes it the active one, file.closeDocument {id, force?} closes it.",
             obj(json!({}), &[]),
             true
         ),
@@ -325,6 +393,35 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         )),
         "get_text" => wrap(exec(b, "document.text", json!({}), doc)),
         "inspect_document" => wrap(b.call("document.inspect", addressed(json!({}), doc))),
+        "get_ir" => {
+            let mut params = json!({});
+            for k in ["from", "to", "fields", "pageBreaksOnly"] {
+                if let Some(x) = a.get(k) {
+                    params[k] = x.clone();
+                }
+            }
+            wrap(exec(b, "doc.getIr", params, doc))
+        }
+        "apply_ir_patch" => match a.get("ops") {
+            Some(ops) => wrap(exec(b, "doc.applyIrPatch", json!({"ops": ops}), doc)),
+            None => ToolResult::error("missing `ops`"),
+        },
+        "apply_body_style" => wrap(exec(b, "doc.applyBodyStyle", json!({}), doc)),
+        "ensure_heading" => {
+            let mut params = json!({});
+            if let Some(levels) = a.get("levels") {
+                params["levels"] = levels.clone();
+            }
+            wrap(exec(b, "doc.ensureHeading", params, doc))
+        }
+        "clear_stray_page_breaks" => wrap(exec(b, "doc.clearStrayPageBreaks", json!({}), doc)),
+        "apply_vkr_layout" => {
+            let mut params = json!({});
+            if let Some(levels) = a.get("levels") {
+                params["levels"] = levels.clone();
+            }
+            wrap(exec(b, "doc.applyVkrLayout", params, doc))
+        }
         "parity" => wrap(b.call("ui.parity", json!({}))),
         // Pictures travel inside the reply (`png`), headless or through the app: no file with a
         // predictable name in the shared temporary folder.

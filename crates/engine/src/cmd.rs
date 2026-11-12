@@ -21,6 +21,7 @@ pub mod format;
 pub mod index;
 pub mod ink_shape;
 pub mod insert;
+pub mod ir;
 pub mod inspector;
 pub mod lists;
 pub mod mailings;
@@ -71,6 +72,7 @@ pub fn registry() -> Registry {
     v.extend(phonetic::specs());
     v.extend(para::specs());
     v.extend(lists::specs());
+    v.extend(ir::specs());
     v.extend(inspector::specs());
     v.extend(view::specs());
     v.extend(outline::specs());

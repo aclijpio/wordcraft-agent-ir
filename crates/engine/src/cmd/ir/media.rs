@@ -15,6 +15,9 @@ pub(crate) fn insert_figure(s: &mut Session, v: &Value) -> CmdResult {
         let path = Path::top(index);
         let off = s.doc.para(StoryRef::Body, &path).map(|para| para.len()).unwrap_or(0);
         s.sel = Selection::caret(Pos { story: StoryRef::Body, path, off });
+    } else {
+        // Agents often leave a range selected; Word would replace it. Agent insert goes after.
+        collapse_sel_to_end(s);
     }
     let mut pic = json!({});
     if let Some(path) = p::str(v, "path") {
@@ -39,12 +42,17 @@ pub(crate) fn insert_figure(s: &mut Session, v: &Value) -> CmdResult {
         let _ = s.run("para.align", &json!({"align": "center"}));
     }
     if let Some(caption) = p::str(v, "caption") {
+        let label = p::str(v, "captionLabel").unwrap_or("Figure");
         let mut cap = json!({
             "text": caption,
             "position": p::str(v, "position").unwrap_or("below"),
+            "label": label,
         });
-        if let Some(label) = p::str(v, "captionLabel") {
-            cap["label"] = json!(label);
+        // "Рисунок 2.1 - Title" already carries the label — do not prepend another.
+        let caption_l = caption.to_ascii_lowercase();
+        let label_l = label.to_ascii_lowercase();
+        if caption_l.starts_with(&label_l) || caption_l.starts_with("рисунок") || caption_l.starts_with("figure") {
+            cap["excludeLabel"] = json!(true);
         }
         if let Some(format) = p::str(v, "format") {
             cap["format"] = json!(format);
@@ -53,8 +61,16 @@ pub(crate) fn insert_figure(s: &mut Session, v: &Value) -> CmdResult {
             cap["separator"] = json!(sep);
         }
         s.run("references.caption", &cap)?;
+        let _ = s.run("format.italic", &json!({"value": false}));
     }
     Ok(full_ir(s))
+}
+
+fn collapse_sel_to_end(s: &mut Session) {
+    if !s.sel.is_collapsed() {
+        let (_, end) = s.sel.ordered();
+        s.sel = Selection::caret(end);
+    }
 }
 
 pub(crate) fn insert_caption(s: &mut Session, v: &Value) -> CmdResult {
@@ -76,6 +92,7 @@ pub(crate) fn insert_caption(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 pub(crate) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
+    collapse_sel_to_end(s);
     s.run("references.toc", v)?;
     Ok(full_ir(s))
 }

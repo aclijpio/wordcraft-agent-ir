@@ -81,6 +81,64 @@ fn apply_ir_patch_insert_delete_move_set_cell() {
 }
 
 #[test]
+fn apply_ir_patch_delete_range_and_table_values() {
+    let mut s = sample();
+    s.run(
+        "doc.applyIrPatch",
+        &json!({"ops":[
+            {"op":"insert","index":1,"block":{"type":"paragraph","text":"A"}},
+            {"op":"insert","index":2,"block":{"type":"paragraph","text":"B"}},
+            {"op":"insert","index":3,"block":{"type":"paragraph","text":"C"}}
+        ]}),
+    )
+    .unwrap();
+    s.run("doc.applyIrPatch", &json!({"ops":[{"op":"delete","from":1,"to":3}]})).unwrap();
+    let body = s.doc.plain_text(StoryRef::Body);
+    assert!(!body.contains('A') && !body.contains('B'), "{body}");
+    assert!(body.contains('C') || body.contains("Hello") || body.contains("World"), "{body}");
+
+    s.run(
+        "doc.applyIrPatch",
+        &json!({"ops":[{"op":"insert","block":{"type":"table","values":[["H1","H2"],["a","b"]],"header":true}}]}),
+    )
+    .unwrap();
+    let ir = s.run("doc.getIr", &json!({"kinds":["table"]})).unwrap();
+    let table = &ir["blocks"].as_array().unwrap()[0];
+    assert_eq!(table["cells"][0][0], "H1");
+    assert_eq!(table["cells"][1][1], "b");
+}
+
+#[test]
+fn apply_layout_caption_not_italic_by_default() {
+    let mut s = sample();
+    s.run(
+        "doc.applyLayout",
+        &json!({"profile":{"caption":{"font":"Times New Roman","size":14.0,"figureAlign":"center"}}}),
+    )
+    .unwrap();
+    let st = s.doc.styles.get("Caption").unwrap();
+    assert_eq!(st.chr.italic, Some(false));
+    assert_eq!(st.chr.size, Some(14.0));
+}
+
+#[test]
+fn insert_toc_does_not_replace_a_range_selection() {
+    let mut d = Document::new();
+    d.body.clear();
+    d.body.push(Arc::new(Block::Para(Paragraph::with_text("Keep me", CharProps::default()))));
+    d.body.push(Arc::new(Block::Para(Paragraph::with_text("Chapter", CharProps::default()).styled("Heading1"))));
+    let mut s = Session::new(d);
+    s.run("doc.ensureHeading", &json!({"levels": 1, "numbering": false})).unwrap();
+    // Select the whole first paragraph — Word insert would delete it; agent TOC must keep it.
+    s.sel = crate::Selection {
+        anchor: wordcraft_doc::Pos::body(0, 0),
+        focus: wordcraft_doc::Pos::body(0, "Keep me".len()),
+    };
+    s.run("doc.insertToc", &json!({"levels": 1, "title": "Contents"})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Keep me"), "{}", s.doc.plain_text(StoryRef::Body));
+}
+
+#[test]
 fn ensure_styles_upserts() {
     let mut s = sample();
     s.run(
@@ -112,4 +170,79 @@ fn insert_toc_and_update_fields_smoke() {
     s.run("doc.updateFields", &json!({"all": true})).unwrap();
     let ir = s.run("doc.getIr", &json!({})).unwrap();
     assert!(ir["blocks"].as_array().unwrap().len() >= 2);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn export_sync_ir_folder_round_trip() {
+    let dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("target"))
+        .join(format!("wc-ir-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = sample();
+    s.run(
+        "doc.ensureStyles",
+        &json!({"styles":[{"id":"Caption","para":{"align":"center","indentFirst":0.0},"chr":{"italic":false,"size":14.0}}]}),
+    )
+    .unwrap();
+    let exported = s.run("doc.exportIr", &json!({"path": dir.to_string_lossy()})).unwrap();
+    assert!(exported["blocks"].as_u64().unwrap() >= 3);
+    let styles: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("styles.json")).unwrap()).unwrap();
+    assert!(styles["styles"].as_array().unwrap().iter().any(|st| st["id"] == "Normal"));
+    assert!(styles["styles"].as_array().unwrap().iter().any(|st| st["id"] == "Caption"));
+
+    let mut styles = styles;
+    for st in styles["styles"].as_array_mut().unwrap() {
+        if st["id"] == "Caption" {
+            st["chr"]["italic"] = json!(false);
+            st["chr"]["size"] = json!(14.0);
+        }
+        if st["id"] == "Heading2" || st["id"] == "Normal" {
+            st["para"]["spaceAfter"] = json!(8.0);
+        }
+    }
+    std::fs::write(dir.join("styles.json"), serde_json::to_string_pretty(&styles).unwrap()).unwrap();
+
+    let ir = s.run("doc.getIr", &json!({})).unwrap();
+    let id0 = ir["blocks"][0]["id"].as_str().unwrap().to_string();
+    s.run(
+        "doc.applyIrPatch",
+        &json!({"ops":[{"op":"update","id":id0,"set":{"text":"Patched by id"}}]}),
+    )
+    .unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Patched by id"));
+
+    s.run("doc.exportIr", &json!({"path": dir.to_string_lossy()})).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
+    let rel = manifest["sectionOrder"][0].as_str().unwrap();
+    let section = dir.join(rel);
+    let mut blocks: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&section).unwrap()).unwrap();
+    if let Some(b0) = blocks.as_array_mut().and_then(|a| a.get_mut(0)) {
+        b0["text"] = json!("From disk");
+        b0["style"] = json!("Normal");
+        b0["align"] = json!("center");
+    }
+    std::fs::write(&section, serde_json::to_string_pretty(&blocks).unwrap()).unwrap();
+
+    s.run("doc.syncIr", &json!({"path": dir.to_string_lossy()})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).contains("From disk"));
+    let path = Path::top(0);
+    let para = s.doc.para(StoryRef::Body, &path).unwrap();
+    assert_eq!(para.props.align, Some(Align::Center));
+    let cap = s.doc.styles.get("Caption").unwrap();
+    assert_eq!(cap.chr.italic, Some(false));
+    assert_eq!(cap.chr.size, Some(14.0));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn ir_path_reports_folder() {
+    let mut s = sample();
+    let v = s.run("doc.irPath", &json!({})).unwrap();
+    assert!(v["path"].as_str().unwrap().contains("ir"));
 }

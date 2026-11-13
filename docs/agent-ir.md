@@ -1,6 +1,6 @@
 # Agent IR (generic)
 
-> **Last updated:** 2026-11-12 · IR v2: layout profiles, structural patch, figures, TOC, tables. Thesis (VKR) rules live in a local skill profile, not in the engine.
+> **Last updated:** 2026-11-13 · IR v2 (in-memory) + file IR v3 (`styles.json` + sections). Thesis (VKR) rules live in a local skill profile, not in the engine.
 
 Agents edit documents through structural IR and high-level `doc.*` / MCP tools.
 
@@ -11,20 +11,44 @@ cargo run --release -p wordcraft -- --control 17991
 cargo run --release -p wordcraft-cli -- mcp --connect 127.0.0.1:17991
 ```
 
+## File IR v3 (preferred for large docs)
+
+One folder per document:
+
+- Saved doc: `{stem}.wordcraft-ir/` next to the `.docx`
+- Unsaved: `{WORDCRAFT_PROFILE_DIR|settings}/ir/{documentId}/`
+
+```
+manifest.json
+styles.json          # style catalog (classes), not per-paragraph formatting
+sections/01-….json   # ordered blocks: id + type + style + content
+assets/….png         # pictures
+```
+
+| Command / MCP | Role |
+|---|---|
+| `doc.exportIr` / `export_ir` | Assign stable ids (bookmarks `_WcIr_<id>`), write styles + sections + assets |
+| `doc.syncIr` / `sync_ir` | Apply `styles.json` to the StyleSheet, rebuild body from section order |
+| `doc.irPath` / `ir_path` | Absolute folder path |
+
+Blocks reference a style by name (`"style":"Heading2"`). Do not copy font/indent onto every paragraph; change `styles.json` or the block's `style`. Rare overrides (`align`, `indentFirst`, …) may sit on one block as direct formatting.
+
+Stable **`id`**: the document stays a sequence; `id` names a block inside that sequence so patches survive inserts/deletes. Prefer `"id"` over `"index"` in `apply_ir_patch` after export.
+
+Live control / MCP apply uses keep-view (no scroll-to-caret). After export, the desktop app can watch the IR folder and debounce-sync.
+
 ## IR (`doc.getIr` / `get_ir`)
 
-Version **2**. Blocks: `paragraph`, `table`, `picture` (picture-only paras). Optional: `from`/`to`, `fields`, `pageBreaksOnly`, `kinds`.
-
-Paragraph fields include `style`, `text`, `align`, `indentFirst`/`Left`/`Right`, `lineSpacing`, `pageBreakBefore`, `numbering`, `role` (`heading`/`caption`/`figureCaption`/`tableCaption`/`toc`), `pictures[]`.
+Version **2**. Blocks: `paragraph`, `table`, `picture`. Optional: `from`/`to`, `fields`, `pageBreaksOnly`, `kinds`. When bookmarks exist, blocks include `id`.
 
 ## Patch (`doc.applyIrPatch` / `apply_ir_patch`)
 
-Ops: `update`, `replace`, `replaceIn`, `insert`, `delete`, `move`, `setStyle`, `setCell`.
+Ops: `update`, `replace`, `replaceIn`, `insert`, `delete`, `move`, `setStyle`, `setCell`. Address with `index` or `id`.
 
 ```json
 {"ops":[
   {"op":"insert","index":0,"block":{"type":"paragraph","text":"Title","style":"Heading1"}},
-  {"op":"replaceIn","index":2,"find":"old","with":"new"},
+  {"op":"replaceIn","id":"b00a1f3c","find":"old","with":"new"},
   {"op":"setCell","index":5,"row":0,"col":1,"text":"B1"}
 ]}
 ```
@@ -33,13 +57,13 @@ Ops: `update`, `replace`, `replaceIn`, `insert`, `delete`, `move`, `setStyle`, `
 
 | Command / MCP | Role |
 |---|---|
-| `doc.applyLayout` / `apply_layout` | Page, margins, Normal, Caption, Headings from `profile` (default = neutral A4/Calibri 11) |
+| `doc.applyLayout` / `apply_layout` | Page, margins, Normal, Caption, Headings from `profile` |
 | `doc.ensureStyles` / `ensure_styles` | Upsert stylesheet entries |
 | `doc.ensureHeading` / `ensure_heading` | Heading 1–N |
 | `doc.clearStrayPageBreaks` | Clear non-Heading1 page breaks |
 | `doc.applyBodyStyle` | Alias of `applyLayout` |
 
-Thesis margins/fonts: pass a profile JSON from a local skill — do not hardcode in the engine.
+Thesis margins/fonts: pass a profile JSON from a local skill — do not hardcode in the engine. After `apply_layout`, `export_ir` refreshes `styles.json` for the agent.
 
 ## Figures / TOC / refs
 
@@ -52,6 +76,8 @@ Thesis margins/fonts: pass a profile JSON from a local skill — do not hardcode
 | `doc.updateFields` / `update_fields` | `references.updateFields` |
 | `doc.insertCrossRef` / `insert_cross_ref` | `insert.crossReference` |
 | `doc.applyTableStyle` | Table `props.style` by body index |
+
+Pictures in file IR: `type:"picture"` + `asset:"assets/….png"`. Tables: `type:"table"` + `cells`. TOC/numbering: styles + existing field/update commands after sync.
 
 ## Templates
 

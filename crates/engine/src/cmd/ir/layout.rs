@@ -130,7 +130,13 @@ fn overlay_normal(s: &mut Session, normal: &Value) -> Result<(), CmdError> {
 fn ensure_caption_from_profile(s: &mut Session, cap: &Value) -> Result<(), CmdError> {
     ensure_style_id(s, "Caption")?;
     let st = Arc::make_mut(&mut s.doc.styles).get_mut("Caption").ok_or_else(|| CmdError::Params("no Caption style".into()))?;
-    st.chr.overlay(&chr_from_value(cap, "Calibri", 9.0, false));
+    // Built-in Caption is italic 9 pt; thesis profiles need upright 12–14. Always clear italic
+    // unless the profile sets `"italic": true`.
+    let mut chr = chr_from_value(cap, "Calibri", 9.0, false);
+    if chr.italic.is_none() {
+        chr.italic = Some(false);
+    }
+    st.chr.overlay(&chr);
     let align = parse_align(p::str(cap, "figureAlign").or_else(|| p::str(cap, "align")).unwrap_or("center"))?;
     let indent_first = p::f32(cap, "indentFirst").unwrap_or(0.0);
     st.para.overlay(&ParaProps {
@@ -167,6 +173,17 @@ fn ensure_heading_from_profile(s: &mut Session, headings: &Value, levels: u8) ->
         let id = ensure_heading_style(s, n);
         let st = Arc::make_mut(&mut s.doc.styles).get_mut(&id).ok_or_else(|| CmdError::Params(format!("no style `{id}`")))?;
         st.chr.overlay(&chr);
+        let (space_before, space_after) = if n == 1 {
+            (
+                p::f32(headings, "spaceBeforeH1").or_else(|| p::f32(headings, "spaceBefore")).unwrap_or(0.0),
+                p::f32(headings, "spaceAfterH1").or_else(|| p::f32(headings, "spaceAfter")).unwrap_or(0.0),
+            )
+        } else {
+            (
+                p::f32(headings, "spaceBeforeH2").or_else(|| p::f32(headings, "spaceBefore")).unwrap_or(0.0),
+                p::f32(headings, "spaceAfterH2").or_else(|| p::f32(headings, "spaceAfter")).unwrap_or(0.0),
+            )
+        };
         st.para.overlay(&ParaProps {
             align: Some(align),
             indent_left: Some(0.0),
@@ -174,18 +191,23 @@ fn ensure_heading_from_profile(s: &mut Session, headings: &Value, levels: u8) ->
             indent_first: Some(indent_first),
             line_spacing: Some(LineSpacing::Multiple(line_spacing)),
             page_break_before: Some(page_break_h1 && n == 1),
-            space_before: Some(0.0),
-            space_after: Some(0.0),
+            space_before: Some(space_before),
+            space_after: Some(space_after),
             ..ParaProps::default()
         });
     }
     if numbering {
         link_heading_numbering(s, indent_first)?;
     }
+    // TOC title must never pick up heading list numbering (СОДЕРЖАНИЕ → "1 СОДЕРЖАНИЕ").
+    clear_toc_heading_numbering(s)?;
     for i in 0..s.doc.body.len() {
         let path = Path::top(i);
         let Some(para) = s.doc.para(StoryRef::Body, &path) else { continue };
         let style = para.props.style.clone().unwrap_or_default();
+        if style == "TOCHeading" || style.starts_with("TOC") {
+            continue;
+        }
         let h1 = is_heading1(s, &para.props);
         let heading = h1 || style.starts_with("Heading");
         if heading {
@@ -198,6 +220,23 @@ fn ensure_heading_from_profile(s: &mut Session, headings: &Value, levels: u8) ->
             if page_break_h1 {
                 para.props.page_break_before = Some(h1);
             }
+            para.touch();
+        }
+    }
+    Ok(())
+}
+
+fn clear_toc_heading_numbering(s: &mut Session) -> Result<(), CmdError> {
+    if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut("TOCHeading") {
+        st.para.numbering = Some(NumRef { num: 0, level: 0 });
+    }
+    for i in 0..s.doc.body.len() {
+        let path = Path::top(i);
+        let Some(para) = s.doc.para(StoryRef::Body, &path) else { continue };
+        let style = para.props.style.clone().unwrap_or_default();
+        if style == "TOCHeading" || style.starts_with("TOC") {
+            let para = s.doc.para_mut(StoryRef::Body, &path)?;
+            para.props.numbering = Some(NumRef { num: 0, level: 0 });
             para.touch();
         }
     }

@@ -152,12 +152,12 @@ pub fn tool_definitions() -> Value {
         tool(
             "get_ir",
             "Document IR",
-            "Agent IR v2: body blocks (paragraph/table/picture) with style, text, indents, role, pictures[]; plus pages and section margins. Optional from/to, fields[], pageBreaksOnly, kinds[].",
+            "Agent IR v2: body blocks (paragraph/table/picture) with style, text, indents, role, pictures[], optional stable id; plus pages and section margins. Optional from/to, fields[], pageBreaksOnly, kinds[]. For large docs prefer export_ir / sync_ir (folder IR v3).",
             with_doc(obj(
                 json!({
                     "from": n("First body index (inclusive)"),
                     "to": n("Last body index (inclusive)"),
-                    "fields": {"type": "array", "items": {"type": "string"}, "description": "Keep only these block keys (index and type always kept)"},
+                    "fields": {"type": "array", "items": {"type": "string"}, "description": "Keep only these block keys (index, type, id always kept)"},
                     "pageBreaksOnly": {"type": "boolean", "description": "Only paragraphs with pageBreakBefore or a Heading* style"},
                     "kinds": {"type": "array", "items": {"type": "string"}, "description": "paragraph|table|picture"}
                 }),
@@ -168,7 +168,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "apply_ir_patch",
             "Apply IR patch",
-            "Patch by body index: update|replace|replaceIn|insert|delete|move|setStyle|setCell. replaceIn edits a word/sentence; insert/delete/move change structure; setCell edits table cells. One undo.",
+            "Patch by body index or stable id: update|replace|replaceIn|insert|delete|move|setStyle|setCell. Prefer id after export_ir. One undo.",
             with_doc(obj(
                 json!({
                     "ops": {
@@ -179,6 +179,7 @@ pub fn tool_definitions() -> Value {
                             "properties": {
                                 "op": s("update|replace|replaceIn|insert|delete|move|setStyle|setCell"),
                                 "index": n("Body block index from get_ir"),
+                                "id": s("Stable block id (from export_ir / get_ir)"),
                                 "from": n("move source index"),
                                 "to": n("move destination index"),
                                 "row": n("setCell row"),
@@ -198,6 +199,27 @@ pub fn tool_definitions() -> Value {
                 &["ops"]
             )),
             false
+        ),
+        tool(
+            "export_ir",
+            "Export IR folder",
+            "Write file-based Agent IR v3 next to the document ({stem}.wordcraft-ir/) or under profile/ir/{documentId}/: styles.json, sections/*.json, assets/. Stable block ids as bookmarks.",
+            with_doc(obj(json!({"path": s("Optional absolute IR folder path")}), &[])),
+            false
+        ),
+        tool(
+            "sync_ir",
+            "Sync IR folder",
+            "Apply styles.json then rebuild body from sections (order + block ids). Use after editing IR files. Does not jump the viewport when run through the live app control channel.",
+            with_doc(obj(json!({"path": s("Optional absolute IR folder path")}), &[])),
+            false
+        ),
+        tool(
+            "ir_path",
+            "IR folder path",
+            "Absolute path of this document's IR folder and whether it exists.",
+            with_doc(obj(json!({}), &[])),
+            true
         ),
         tool(
             "apply_layout",
@@ -415,6 +437,8 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         },
         "insert_table" => match a.get("values") {
             Some(values) => {
+                // Do not replace a non-collapsed selection (agents often still have a heading selected).
+                let _ = exec(b, "select.collapse", json!({"end": true}), doc);
                 let mut params = json!({"values": values});
                 for k in ["header", "style"] {
                     if let Some(x) = a.get(k) {
@@ -536,6 +560,21 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "update_toc" => wrap(exec(b, "doc.updateToc", a.clone(), doc)),
         "update_fields" => wrap(exec(b, "doc.updateFields", a.clone(), doc)),
         "insert_cross_ref" => wrap(exec(b, "doc.insertCrossRef", a.clone(), doc)),
+        "export_ir" => {
+            let mut params = json!({});
+            if let Some(path) = a.get("path") {
+                params["path"] = path.clone();
+            }
+            wrap(exec(b, "doc.exportIr", params, doc))
+        }
+        "sync_ir" => {
+            let mut params = json!({});
+            if let Some(path) = a.get("path") {
+                params["path"] = path.clone();
+            }
+            wrap(exec(b, "doc.syncIr", params, doc))
+        }
+        "ir_path" => wrap(exec(b, "doc.irPath", json!({}), doc)),
         "parity" => wrap(b.call("ui.parity", json!({}))),
         // Pictures travel inside the reply (`png`), headless or through the app: no file with a
         // predictable name in the shared temporary folder.

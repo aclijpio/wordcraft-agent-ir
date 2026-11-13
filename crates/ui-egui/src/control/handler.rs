@@ -243,7 +243,8 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             if let Some(e) = close_refused(app, id, &params) {
                 return err(e);
             }
-            match app.execute(id, params) {
+            // Agents and scripts: keep the reader's scroll; do not chase the caret after every patch.
+            match app.execute_keep_view(id, params) {
                 Ok(v) => ok(v),
                 Err(e) => err(e),
             }

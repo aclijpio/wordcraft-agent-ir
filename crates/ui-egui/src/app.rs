@@ -150,6 +150,7 @@ impl WordApp {
             parked: Default::default(),
             windows: windows::Windows::new(shown_document),
             print_document: None,
+            ir_watch: crate::ir_watch::IrWatch::default(),
             canvas,
             controls,
             dialog,
@@ -386,6 +387,7 @@ impl WordApp {
         }
         zotero::poll(self, ctx);
         read_aloud::poll(self, ctx);
+        crate::ir_watch::IrWatch::poll(self);
         self.clear_stale_change_picture();
         let _ = self.poll_file_dialog();
         self.autosave_tick(now_ms());

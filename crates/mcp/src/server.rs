@@ -25,7 +25,8 @@ parameters with list_commands and run them with execute (or several with batch).
 execute format.bold → inspect_document to verify → render_page to look at the result → save {path:\"out.docx\"}. \
 Several documents can be open: new_document and open_document open another one and make it active; \
 list_documents gives their ids, and `doc` on execute, batch and the other document tools works on one \
-without switching.";
+without switching. Large documents: export_ir → edit styles.json and sections/*.json → sync_ir \
+(stable block ids; styles catalog separate from blocks).";
 
 /// Resource URIs.
 pub const DOC_URI: &str = "wordcraft://document";

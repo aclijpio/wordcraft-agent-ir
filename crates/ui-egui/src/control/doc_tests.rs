@@ -20,6 +20,19 @@ fn send(a: &mut WordApp, method: &str, params: Value) -> Value {
     }
 }
 
+/// Control/MCP edits must not ask the canvas to chase the caret (reader stays put).
+#[test]
+fn control_execute_keeps_the_view() {
+    let mut a = app();
+    assert_eq!(exec(&mut a, "text.insert", json!({"text": "Hello"}))["ok"], true);
+    a.canvas.scroll_to_caret = false;
+    assert_eq!(exec(&mut a, "text.insert", json!({"text": " world"}))["ok"], true);
+    assert!(!a.canvas.scroll_to_caret, "control execute scrolled to the caret");
+    a.canvas.scroll_to_caret = false;
+    a.run("text.insert", json!({"text": "!"})).unwrap();
+    assert!(a.canvas.scroll_to_caret, "a user run still follows the caret");
+}
+
 fn exec(a: &mut WordApp, command: &str, params: Value) -> Value {
     send(a, "engine.execute", json!({"command": command, "params": params}))
 }

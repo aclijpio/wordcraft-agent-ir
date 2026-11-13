@@ -12,6 +12,11 @@ pub fn settings_dir() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("WORDCRAFT_PROFILE_DIR").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(path));
     }
+    default_settings_dir()
+}
+
+/// Platform default settings folder, ignoring `WORDCRAFT_PROFILE_DIR`.
+pub fn default_settings_dir() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
         std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/WordCraft"))
     } else if cfg!(windows) {
@@ -22,6 +27,22 @@ pub fn settings_dir() -> Option<PathBuf> {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
             .map(|c| c.join("wordcraft"))
     }
+}
+
+/// Folders to try when reading a control key: profile override first, then the OS default.
+/// An agent MCP may have `WORDCRAFT_PROFILE_DIR` pointed at an install while the user launched a
+/// portable copy that wrote the key under `%APPDATA%\WordCraft` (or the reverse).
+pub fn settings_dirs_for_key() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(d) = settings_dir() {
+        dirs.push(d);
+    }
+    if let Some(d) = default_settings_dir()
+        && !dirs.iter().any(|x| x == &d)
+    {
+        dirs.push(d);
+    }
+    dirs
 }
 
 /// The `instance-id=` value of a `/.flatpak-info` file, only when it is `[A-Za-z0-9_-]+` (it

@@ -1,8 +1,11 @@
 //! Agent document IR: slim inspect + high-level apply (generic, not thesis-specific).
 
+mod file_ir;
+mod ids;
 mod layout;
 mod media;
 mod patch;
+mod styles_catalog;
 mod templates;
 
 use serde_json::{Value, json};
@@ -23,7 +26,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"from"?: n, "to"?: n, "fields"?: [string], "pageBreaksOnly"?: bool, "kinds"?: ["paragraph"|"table"|"picture"]}"#)
             .pure(),
         CommandSpec::new("doc.applyIrPatch", "Apply IR Patch", "Agents", patch::apply_ir_patch).params(
-            r#"{"ops":[{"op":"update"|"replace"|"replaceIn"|"insert"|"delete"|"move"|"setStyle"|"setCell",…}]}"#,
+            r#"{"ops":[{"op":"update"|"replace"|"replaceIn"|"insert"|"delete"|"move"|"setStyle"|"setCell","index"|"id"?:…}]}"#,
         ),
         CommandSpec::new("doc.applyLayout", "Apply Layout Profile", "Agents", layout::apply_layout)
             .params(r#"{"profile"?: object, "clearStrayPageBreaks"?: bool}"#),
@@ -51,6 +54,13 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"index":n, "style":string}"#),
         CommandSpec::new("doc.newFromTemplate", "New From Agent Template", "Agents", templates::new_from_template)
             .params(r#"{"id"|"path"|"template": string}"#),
+        CommandSpec::new("doc.exportIr", "Export IR Folder", "Agents", file_ir::export_ir)
+            .params(r#"{"path"?: string}"#),
+        CommandSpec::new("doc.syncIr", "Sync IR Folder", "Agents", file_ir::sync_ir)
+            .params(r#"{"path"?: string}"#),
+        CommandSpec::new("doc.irPath", "IR Folder Path", "Agents", file_ir::ir_path_cmd)
+            .params(r#"{}"#)
+            .pure(),
     ]
 }
 
@@ -126,6 +136,9 @@ fn build_ir(s: &mut Session, filter: &IrFilter) -> Value {
                     "indentRight": resolved.indent_right,
                     "pageBreakBefore": page_break_before,
                 });
+                if let Some(id) = ids::block_id_at(s, i) {
+                    o["id"] = json!(id);
+                }
                 if let Some(role) = detect_role(s, &style, &text, para) {
                     o["role"] = json!(role);
                 }
@@ -167,6 +180,9 @@ fn build_ir(s: &mut Session, filter: &IrFilter) -> Value {
                     "style": t.props.style,
                     "cells": cells
                 });
+                if let Some(id) = ids::block_id_at(s, i) {
+                    o["id"] = json!(id);
+                }
                 if let Some(fields) = &filter.fields {
                     o = keep_fields(o, fields);
                 }
@@ -276,7 +292,7 @@ fn align_name(a: Align) -> &'static str {
 fn keep_fields(mut o: Value, fields: &[String]) -> Value {
     let Some(map) = o.as_object_mut() else { return o };
     let keep: std::collections::HashSet<&str> =
-        fields.iter().map(String::as_str).chain(["index", "type"]).collect();
+        fields.iter().map(String::as_str).chain(["index", "type", "id"]).collect();
     map.retain(|k, _| keep.contains(k.as_str()));
     o
 }
@@ -303,9 +319,7 @@ pub(crate) fn find_nth(haystack: &str, needle: &str, occurrence: usize) -> Optio
     let mut from = 0usize;
     let mut seen = 0usize;
     while from <= haystack.len() {
-        let Some(rel) = haystack.get(from..)?.find(needle) else {
-            return None;
-        };
+        let rel = haystack.get(from..)?.find(needle)?;
         let at = from.saturating_add(rel);
         seen = seen.saturating_add(1);
         if seen == occurrence {

@@ -48,6 +48,7 @@ pub mod frame;
 pub mod guides;
 pub mod i18n;
 pub mod ibeam;
+pub mod ir_watch;
 pub mod icons;
 pub mod ink;
 pub mod keys;
@@ -801,6 +802,7 @@ pub struct WordApp {
     pub(crate) windows: windows::Windows,
     /// The document the last print job was for: its window reports how the job went.
     print_document: Option<u64>,
+    pub(crate) ir_watch: ir_watch::IrWatch,
 }
 
 /// Every `.rs` file under `dir`, subdirectories included, in a fixed order: tests that scan the

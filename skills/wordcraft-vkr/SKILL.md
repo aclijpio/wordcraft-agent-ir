@@ -12,8 +12,8 @@ VKR is a **scenario**, not an engine feature. Use generic MCP tools with a local
 1. Read local VKR rules (e.g. `ВКР-правила-письма.md`).
 2. Prefer `wordcraft-live` (app `--control`).
 3. Load thesis layout via `apply_layout` with profile from this skill folder (`profile.json`), not `apply_vkr_layout` (removed).
-4. Prefer high-level tools: `get_ir`, `apply_ir_patch` (`replaceIn` for words), `insert_figure`, `insert_toc`, `apply_layout`, `ensure_heading`.
-5. Work on a **copy** of the `.docx`.
+4. Prefer high-level tools: for large docs `export_ir` → edit `styles.json` / `sections/*.json` → `sync_ir`; else `get_ir`, `apply_ir_patch` (`id` or `replaceIn`), `insert_figure`, `insert_toc`, `apply_layout`, `ensure_heading`.
+5. Work on a **copy** of the `.docx`. Styles live in the IR catalog (`styles.json`), not copied onto every paragraph.
 
 ## Profile
 

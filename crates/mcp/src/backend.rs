@@ -2,7 +2,7 @@
 
 use std::io::{BufReader, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -41,25 +41,48 @@ pub struct Remote {
 }
 
 /// The control key: `env` (`WORDCRAFT_CONTROL_KEY`) when set, else the app's key file for
-/// `port` in `settings`. The error says where it looked.
-fn lookup_key(env: Option<String>, settings: Option<&Path>, port: Option<u16>) -> Result<String, String> {
+/// `port` under each candidate settings folder. The error lists where it looked.
+fn lookup_key(env: Option<String>, settings_dirs: &[PathBuf], port: Option<u16>) -> Result<String, String> {
     if let Some(k) = env.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
         return Ok(k);
     }
-    let (Some(settings), Some(port)) = (settings, port) else {
-        return Err("no control key: set WORDCRAFT_CONTROL_KEY (no settings folder or port to find the key file)".to_string());
+    let Some(port) = port else {
+        return Err("no control key: set WORDCRAFT_CONTROL_KEY (no port to find the key file)".to_string());
     };
-    let path = wordcraft_control_key::key_path(settings, port);
-    match std::fs::read_to_string(&path).map(|k| k.trim().to_string()) {
-        Ok(k) if !k.is_empty() => Ok(k),
-        _ => Err(format!("no control key: set WORDCRAFT_CONTROL_KEY, or start the app with --control {port} (it writes {})", path.display())),
+    if settings_dirs.is_empty() {
+        return Err("no control key: set WORDCRAFT_CONTROL_KEY (no settings folder to find the key file)".to_string());
     }
+    let mut tried = Vec::new();
+    for settings in settings_dirs {
+        let path = wordcraft_control_key::key_path(settings, port);
+        match std::fs::read_to_string(&path).map(|k| k.trim().to_string()) {
+            Ok(k) if !k.is_empty() => return Ok(k),
+            _ => tried.push(path.display().to_string()),
+        }
+    }
+    Err(format!(
+        "no control key: set WORDCRAFT_CONTROL_KEY, or start the app with --control {port} so it writes a key file (looked in {})",
+        tried.join(", ")
+    ))
 }
 
-/// The key for the app at `addr`, from the environment or the app's key file.
+/// Settings folders that may hold `control-key.local-<port>` for a live app.
+fn key_settings_dirs() -> Vec<PathBuf> {
+    let mut dirs = wordcraft_control_key::settings_dirs_for_key();
+    // Agent IR install profile (MCP often points here while a portable exe wrote elsewhere).
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let install = PathBuf::from(local).join("Programs").join("WordCraft-Agent-IR").join("profile");
+        if !dirs.iter().any(|d| d == &install) {
+            dirs.push(install);
+        }
+    }
+    dirs
+}
+
+/// The key for the app at `addr`, from the environment or a known key file location.
 fn find_key(addr: &str) -> Result<String, String> {
     let port = addr.rsplit_once(':').and_then(|(_, p)| p.parse().ok());
-    lookup_key(std::env::var("WORDCRAFT_CONTROL_KEY").ok(), wordcraft_control_key::settings_dir().as_deref(), port)
+    lookup_key(std::env::var("WORDCRAFT_CONTROL_KEY").ok(), &key_settings_dirs(), port)
 }
 
 /// The only address the app's control server binds (`apps/wordcraft/src/control_server.rs`).
@@ -343,25 +366,28 @@ mod tests {
 
     #[test]
     fn key_from_env_then_key_file() {
-        let dir = std::env::temp_dir().join(format!("wordcraft-mcp-key-{}", std::process::id()));
+        // Prefer CARGO_TARGET_DIR over %TEMP%: some Windows sandboxes deny create there.
+        let root = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let dir = root.join(format!("wordcraft-mcp-key-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).expect("key test dir");
         let path = wordcraft_control_key::key_path(&dir, 7981);
         // Neither: the error names the variable and the file it looked for.
-        let e = lookup_key(None, Some(&dir), Some(7981)).unwrap_err();
+        let dirs = [dir.clone()];
+        let e = lookup_key(None, &dirs, Some(7981)).unwrap_err();
         assert!(e.contains("WORDCRAFT_CONTROL_KEY") && e.contains(&path.display().to_string()), "{e}");
         // The key file, trimmed; an empty variable does not count.
         std::fs::write(&path, "  file-key\n").unwrap();
-        assert_eq!(lookup_key(None, Some(&dir), Some(7981)).unwrap(), "file-key");
-        assert_eq!(lookup_key(Some(" ".into()), Some(&dir), Some(7981)).unwrap(), "file-key");
+        assert_eq!(lookup_key(None, &dirs, Some(7981)).unwrap(), "file-key");
+        assert_eq!(lookup_key(Some(" ".into()), &dirs, Some(7981)).unwrap(), "file-key");
         // The variable wins.
-        assert_eq!(lookup_key(Some(" env-key ".into()), Some(&dir), Some(7981)).unwrap(), "env-key");
-        assert_eq!(lookup_key(Some("env-key".into()), None, None).unwrap(), "env-key");
+        assert_eq!(lookup_key(Some(" env-key ".into()), &dirs, Some(7981)).unwrap(), "env-key");
+        assert_eq!(lookup_key(Some("env-key".into()), &[], None).unwrap(), "env-key");
         // Read again every time: the app writes a new key at every start.
         std::fs::write(&path, "new-key").unwrap();
-        assert_eq!(lookup_key(None, Some(&dir), Some(7981)).unwrap(), "new-key");
+        assert_eq!(lookup_key(None, &dirs, Some(7981)).unwrap(), "new-key");
         // Another port, another file.
-        assert!(lookup_key(None, Some(&dir), Some(7982)).is_err());
+        assert!(lookup_key(None, &dirs, Some(7982)).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

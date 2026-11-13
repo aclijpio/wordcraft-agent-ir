@@ -13,6 +13,15 @@ impl WordApp {
         r
     }
 
+    /// Control channel / MCP: same as [`Self::execute`], but the canvas does not follow the caret.
+    /// Agents edit out of view; jumping the reader to the caret on every patch is the wrong default.
+    pub fn execute_keep_view(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.canvas.keep_view = true;
+        let r = self.execute(id, params);
+        self.canvas.keep_view = false;
+        r
+    }
+
     /// Run a command as the input method's own transaction while preserving every normal
     /// [`Self::run`] side effect (save prompts, clipboard, body-epoch tracking, status, …).
     ///

@@ -328,6 +328,13 @@ impl Document {
         if let Some(para) = self.para_at(p) {
             return Pos { story: p.story, path: p.path.clone(), off: para.clamp(p.off) };
         }
+        if self.story(p.story).is_some()
+            && self.table(p.story, &p.path).is_some()
+            && let Some(path) = self.para_paths(p.story).into_iter().find(|q| q.0.len() > p.path.0.len() && q.0.starts_with(&p.path.0))
+        {
+            let off = self.para(p.story, &path).map(|q| q.clamp(p.off)).unwrap_or(0);
+            return Pos { story: p.story, path, off };
+        }
         let story = if self.story(p.story).is_some() { p.story } else { StoryRef::Body };
         let all = self.para_paths(story);
         let path = all.iter().rev().find(|q| **q <= p.path).or(all.first()).cloned().unwrap_or_else(|| Path::top(0));

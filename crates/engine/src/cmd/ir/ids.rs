@@ -124,11 +124,7 @@ fn anchor_path(doc: &wordcraft_doc::Document, index: usize) -> Option<Path> {
 }
 
 fn alloc_id(used: &HashSet<String>, index: usize, document_id: u64, rev: u64) -> String {
-    let mut n = document_id
-        .wrapping_mul(1_000_003)
-        .wrapping_add(rev.wrapping_mul(97))
-        .wrapping_add(index as u64)
-        .wrapping_add(1);
+    let mut n = document_id.wrapping_mul(1_000_003).wrapping_add(rev.wrapping_mul(97)).wrapping_add(index as u64).wrapping_add(1);
     for _ in 0..10_000 {
         let id = format!("b{n:08x}");
         if !used.contains(&id) {

@@ -26,18 +26,14 @@ pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
         }
         other => {
             // Resolve packaged template relative to CARGO_MANIFEST_DIR / packaging when present.
-            let packaged = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../packaging/agent-ir/templates")
-                .join(format!("{other}.docx"));
+            let packaged = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/agent-ir/templates").join(format!("{other}.docx"));
             if packaged.is_file() {
                 s.run(
                     "file.newFromTemplate",
                     &json!({"path": packaged.to_string_lossy(), "replaceBlank": p::bool(v, "replaceBlank").unwrap_or(false)}),
                 )?;
             } else {
-                return Err(CmdError::Params(format!(
-                    "unknown template `{other}` (use blank|sample|letter|resume|report|agent-* or path)"
-                )));
+                return Err(CmdError::Params(format!("unknown template `{other}` (use blank|sample|letter|resume|report|agent-* or path)")));
             }
         }
     }

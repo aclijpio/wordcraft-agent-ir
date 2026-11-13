@@ -64,14 +64,35 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
     })
 }
 
+pub(crate) fn effective_numbering(s: &Session, pos: &wordcraft_doc::Pos) -> Option<NumRef> {
+    let p = s.doc.para_at(pos)?;
+    if let Some(n) = p.props.numbering {
+        return (n.num != 0).then_some(n);
+    }
+    s.doc.styles.resolve_para(&p.props).numbering.filter(|n| n.num != 0)
+}
+
 pub(super) fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {
+    restart_from(s, None)
+}
+
+pub(crate) fn restart_from(s: &mut Session, start: Option<u32>) -> CmdResult {
     let f = s.sel.focus.clone();
-    let Some(n) = s.doc.para_at(&f).and_then(|p| p.props.numbering).filter(|n| n.num != 0) else {
+    let Some(n) = effective_numbering(s, &f) else {
         return Err(CmdError::Failed("not in a numbered list".into()));
     };
     let new = Arc::make_mut(&mut s.doc.numbering).restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
-    // This paragraph and the following ones of the same list use the new instance.
-    let paths: Vec<_> = s.doc.para_paths(f.story).into_iter().filter(|p| *p >= f.path).collect();
+    if let Some(value) = start
+        && let Some(num) = Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == new)
+    {
+        num.start_overrides = vec![(n.level, value)];
+    }
+    {
+        let para = s.doc.para_mut(f.story, &f.path)?;
+        para.props.numbering = Some(NumRef { num: new, level: n.level });
+        para.touch();
+    }
+    let paths: Vec<_> = s.doc.para_paths(f.story).into_iter().filter(|p| *p > f.path).collect();
     for path in paths {
         let para = s.doc.para_mut(f.story, &path)?;
         match para.props.numbering {

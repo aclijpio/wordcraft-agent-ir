@@ -84,12 +84,12 @@ pub(crate) fn apply_ir_patch(s: &mut Session, v: &Value) -> CmdResult {
             }
             "setStyle" => {
                 let index = resolve_op_index(s, op, i)?;
-                let style = p::str(op, "style").or_else(|| op.get("set").and_then(|x| p::str(x, "style")))
+                let style = p::str(op, "style")
+                    .or_else(|| op.get("set").and_then(|x| p::str(x, "style")))
                     .ok_or_else(|| CmdError::Params(format!("ops[{i}]: setStyle needs `style`")))?;
                 let path = Path::top(index);
                 let para = s.doc.para_mut(StoryRef::Body, &path).map_err(|_| CmdError::Params(format!("block {index} is not a paragraph")))?;
-                para.props.style = Some(style.to_string());
-                para.props.outline_level = None;
+                assign_paragraph_style(para, style, op)?;
                 para.touch();
                 changed = changed.saturating_add(1);
             }
@@ -105,6 +105,29 @@ pub(crate) fn apply_ir_patch(s: &mut Session, v: &Value) -> CmdResult {
         o.insert("changed".into(), json!(changed));
     }
     Ok(ir)
+}
+
+fn assign_paragraph_style(para: &mut Paragraph, style: &str, explicit: &Value) -> Result<(), CmdError> {
+    if style.starts_with("Heading") && !p::bool(explicit, "force").unwrap_or(false) {
+        let text = para.plain_text();
+        let t = text.trim_start();
+        if para.props.style.as_deref() == Some("Caption") || super::caption_figure_prefix(t) || super::caption_table_prefix(t) {
+            return Err(CmdError::Params("refusing Heading style on a caption; set force:true to override".into()));
+        }
+    }
+    let old = para.props.style.clone().unwrap_or_else(|| "Normal".into());
+    let leaving = old.starts_with("Heading") && !style.starts_with("Heading");
+    para.props.style = Some(style.to_string());
+    para.props.outline_level = None;
+    if leaving {
+        if explicit.get("pageBreakBefore").is_none() {
+            para.props.page_break_before = Some(false);
+        }
+        if explicit.get("numbering").is_none() {
+            para.props.numbering = Some(NumRef { num: 0, level: 0 });
+        }
+    }
+    Ok(())
 }
 
 fn apply_update(s: &mut Session, index: usize, set: &Value) -> Result<(), CmdError> {
@@ -141,8 +164,7 @@ fn apply_update(s: &mut Session, index: usize, set: &Value) -> Result<(), CmdErr
     }
     let para = s.doc.para_mut(StoryRef::Body, &path)?;
     if let Some(style) = p::str(set, "style") {
-        para.props.style = Some(style.to_string());
-        para.props.outline_level = None;
+        assign_paragraph_style(para, style, set)?;
     }
     if let Some(a) = p::str(set, "align") {
         para.props.align = Some(parse_align(a)?);
@@ -261,9 +283,7 @@ fn apply_replace(s: &mut Session, index: usize, block: &Value) -> Result<(), Cmd
         "table" => {
             let new_block = table_block_from_ir(block, "replace")?;
             s.doc.remove_block(StoryRef::Body, &Path::top(index)).map_err(|e| CmdError::Failed(e.to_string()))?;
-            s.doc
-                .insert_block(StoryRef::Body, &Path::top(index), new_block)
-                .map_err(|e| CmdError::Failed(e.to_string()))?;
+            s.doc.insert_block(StoryRef::Body, &Path::top(index), new_block).map_err(|e| CmdError::Failed(e.to_string()))?;
             if let Some(id) = keep_id.as_deref() {
                 set_block_id(s, index, id)?;
             }
@@ -285,8 +305,8 @@ fn replace_in_paragraph(s: &mut Session, index: usize, find: &str, with: &str, o
         return Err(CmdError::Params(format!("block {index} is not a paragraph")));
     };
     let text = para.plain_text();
-    let plain_start = find_nth(&text, find, occurrence)
-        .ok_or_else(|| CmdError::Params(format!("occurrence {occurrence} of `find` not in paragraph {index}")))?;
+    let plain_start =
+        find_nth(&text, find, occurrence).ok_or_else(|| CmdError::Params(format!("occurrence {occurrence} of `find` not in paragraph {index}")))?;
     let plain_end = plain_start.saturating_add(find.len());
     if !text.is_char_boundary(plain_start) || !text.is_char_boundary(plain_end) {
         return Err(CmdError::Params("replace range is not on a char boundary".into()));
@@ -338,33 +358,26 @@ fn apply_insert(s: &mut Session, op: &Value, i: usize) -> Result<usize, CmdError
 }
 
 fn table_block_from_ir(block: &Value, ctx: &str) -> Result<Block, CmdError> {
-    let grid = block
-        .get("cells")
-        .or_else(|| block.get("values"))
-        .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| row.as_array())
-                .map(|cols| {
-                    cols.iter()
-                        .map(|c| match c {
-                            Value::Null => String::new(),
-                            Value::String(s) => s.clone(),
-                            other => other.to_string().trim_matches('"').to_string(),
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>()
-        });
+    let grid = block.get("cells").or_else(|| block.get("values")).and_then(Value::as_array).map(|rows| {
+        rows.iter()
+            .filter_map(|row| row.as_array())
+            .map(|cols| {
+                cols.iter()
+                    .map(|c| match c {
+                        Value::Null => String::new(),
+                        Value::String(s) => s.clone(),
+                        other => other.to_string().trim_matches('"').to_string(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    });
     let (rows, cols) = if let Some(ref g) = grid {
         let rows = g.len().clamp(1, 1000);
         let cols = g.iter().map(|r| r.len()).max().unwrap_or(1).clamp(1, 63);
         (rows, cols)
     } else {
-        (
-            p::u64(block, "rows").unwrap_or(2).clamp(1, 100) as usize,
-            p::u64(block, "cols").unwrap_or(2).clamp(1, 63) as usize,
-        )
+        (p::u64(block, "rows").unwrap_or(2).clamp(1, 100) as usize, p::u64(block, "cols").unwrap_or(2).clamp(1, 63) as usize)
     };
     if rows == 0 || cols == 0 {
         return Err(CmdError::Params(format!("{ctx}: table needs rows and cols")));
@@ -419,12 +432,8 @@ fn set_cell(s: &mut Session, op: &Value, i: usize) -> Result<(), CmdError> {
     if let Some(set) = op.get("set") {
         let text = p::str(set, "text");
         if let Some(text) = text {
-            let mark = s
-                .doc
-                .para(StoryRef::Body, &path)
-                .ok_or_else(|| CmdError::Params(format!("ops[{i}]: cell ({row},{col}) missing")))?
-                .mark
-                .clone();
+            let mark =
+                s.doc.para(StoryRef::Body, &path).ok_or_else(|| CmdError::Params(format!("ops[{i}]: cell ({row},{col}) missing")))?.mark.clone();
             let para = s.doc.para_mut(StoryRef::Body, &path)?;
             let len = para.len();
             if len > 0 {
@@ -441,12 +450,7 @@ fn set_cell(s: &mut Session, op: &Value, i: usize) -> Result<(), CmdError> {
         }
         para.touch();
     } else if let Some(text) = p::str(op, "text") {
-        let mark = s
-            .doc
-            .para(StoryRef::Body, &path)
-            .ok_or_else(|| CmdError::Params(format!("ops[{i}]: cell ({row},{col}) missing")))?
-            .mark
-            .clone();
+        let mark = s.doc.para(StoryRef::Body, &path).ok_or_else(|| CmdError::Params(format!("ops[{i}]: cell ({row},{col}) missing")))?.mark.clone();
         let para = s.doc.para_mut(StoryRef::Body, &path)?;
         let len = para.len();
         if len > 0 {

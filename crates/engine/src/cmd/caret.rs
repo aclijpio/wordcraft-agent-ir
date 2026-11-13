@@ -60,7 +60,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"unit": "word|sentence|line|paragraph|document", "start": Pos, "end": Pos, "pos": Pos}"#)
             .pure(),
         CommandSpec::new("select.line", "Select Line", "Navigation", select_line).params(r#"{"pos"?: Pos}"#).pure(),
-        CommandSpec::new("select.text", "Select Text", "Navigation", select_text).params(r#"{"text": string, "occurrence"?: n}"#).pure(),
+        CommandSpec::new("select.text", "Select Text", "Navigation", select_text)
+            .params(r#"{"text": string, "occurrence"?: n} — skips a TOC style (TOCHeading, TOC1, …) when the same text also occurs in the body, so a chapter title is not taken from the contents"#)
+            .pure(),
         CommandSpec::new("select.collapse", "Collapse Selection", "Navigation", |s, v| {
             let to_end = p::bool(v, "end").unwrap_or(false);
             let (a, b) = s.sel.ordered();
@@ -473,6 +475,13 @@ fn drag_unit(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+fn select_hit(s: &mut Session, story: StoryRef, hit: &(wordcraft_doc::Path, usize, usize)) -> CmdResult {
+    let (path, a, b) = hit;
+    s.sel = Selection { anchor: Pos { story, path: path.clone(), off: *a }, focus: Pos { story, path: path.clone(), off: *b } };
+    s.pending = None;
+    sel_result(s)
+}
+
 /// Select the n-th occurrence of `text` in the body (agents: "select the word X").
 fn select_text(s: &mut Session, v: &Value) -> CmdResult {
     let needle = p::req_str(v, "text")?;
@@ -480,21 +489,30 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
     if needle.is_empty() {
         return Err(CmdError::Params("`text` is empty".into()));
     }
-    let mut count = 0;
     let story = super::story_param(s, v);
+    let mut body: Vec<(wordcraft_doc::Path, usize, usize)> = Vec::new();
+    let mut toc: Vec<(wordcraft_doc::Path, usize, usize)> = Vec::new();
     for path in s.doc.para_paths(story) {
         let Some(p) = s.doc.para(story, &path) else { continue };
+        let in_toc = p.props.style.as_deref().is_some_and(|st| st == "TOCHeading" || st.starts_with("TOC"));
         for (i, _) in p.text.match_indices(needle) {
-            count += 1;
-            if count == n {
-                s.sel =
-                    Selection { anchor: Pos { story, path: path.clone(), off: i }, focus: Pos { story, path: path.clone(), off: i + needle.len() } };
-                // Formatting picked for the old caret doesn't carry over (as `select.word`): what
-                // replaces the selection takes its formatting.
-                s.pending = None;
-                return sel_result(s);
+            let hit = (path.clone(), i, i.saturating_add(needle.len()));
+            if in_toc {
+                if body.is_empty() && toc.len() < n {
+                    toc.push(hit);
+                }
+            } else {
+                body.push(hit);
+                if body.len() == n {
+                    return select_hit(s, story, &body[n - 1]);
+                }
             }
         }
+    }
+    if body.is_empty()
+        && let Some(hit) = toc.get(n - 1)
+    {
+        return select_hit(s, story, hit);
     }
     let _ = StoryRef::Body;
     Err(CmdError::Failed(format!("`{needle}` not found")))

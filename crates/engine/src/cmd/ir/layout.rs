@@ -218,7 +218,15 @@ fn ensure_heading_from_profile(s: &mut Session, headings: &Value, levels: u8) ->
             para.props.indent_first = None;
             para.props.cancel_char_indents(true, true, true);
             if page_break_h1 {
-                para.props.page_break_before = Some(h1);
+                // The style carries the break. A direct true stays after the paragraph
+                // leaves Heading1 and splits a caption from its picture.
+                if h1 {
+                    if para.props.page_break_before == Some(true) {
+                        para.props.page_break_before = None;
+                    }
+                } else if para.props.page_break_before == Some(true) {
+                    para.props.page_break_before = Some(false);
+                }
             }
             para.touch();
         }

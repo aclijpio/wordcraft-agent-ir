@@ -1,6 +1,7 @@
 //! File-based Agent IR: export/sync one folder per document.
 
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use wordcraft_doc::props::{Align, CharProps};
@@ -60,23 +61,19 @@ fn export_ir_native(s: &mut Session, v: &Value) -> CmdResult {
     let mut section_idx = 0u32;
     let mut section_slug = "start".to_string();
 
-    let flush = |section_idx: u32,
-                 section_slug: &str,
-                 current: &mut Vec<Value>,
-                 section_files: &mut Vec<String>,
-                 dir: &Path|
-     -> Result<(), CmdError> {
-        if current.is_empty() && !section_files.is_empty() {
-            return Ok(());
-        }
-        let name = format!("{section_idx:02}-{section_slug}.json");
-        let path = dir.join("sections").join(&name);
-        let text = serde_json::to_string_pretty(current).map_err(|e| CmdError::Failed(e.to_string()))?;
-        styles_catalog::write_text(&path, &text)?;
-        section_files.push(format!("sections/{name}"));
-        current.clear();
-        Ok(())
-    };
+    let flush =
+        |section_idx: u32, section_slug: &str, current: &mut Vec<Value>, section_files: &mut Vec<String>, dir: &Path| -> Result<(), CmdError> {
+            if current.is_empty() && !section_files.is_empty() {
+                return Ok(());
+            }
+            let name = format!("{section_idx:02}-{section_slug}.json");
+            let path = dir.join("sections").join(&name);
+            let text = serde_json::to_string_pretty(current).map_err(|e| CmdError::Failed(e.to_string()))?;
+            styles_catalog::write_text(&path, &text)?;
+            section_files.push(format!("sections/{name}"));
+            current.clear();
+            Ok(())
+        };
 
     for i in 0..end {
         let Some(b) = s.doc.body.get(i) else { break };
@@ -116,11 +113,7 @@ fn sync_ir_native(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Failed(format!("IR folder not found: {}", dir.display())));
     }
     let manifest: Value = read_json(&dir.join("manifest.json"))?;
-    let section_order = manifest
-        .get("sectionOrder")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let section_order = manifest.get("sectionOrder").and_then(Value::as_array).cloned().unwrap_or_default();
     if section_order.is_empty() {
         return Err(CmdError::Failed("manifest.json has empty sectionOrder".into()));
     }
@@ -131,7 +124,8 @@ fn sync_ir_native(s: &mut Session, v: &Value) -> CmdResult {
         apply_styles_json(s, &catalog)?;
     }
 
-    let mut blocks: Vec<(String, Block)> = Vec::new();
+    let mut pending: Vec<(String, String, Value)> = Vec::new();
+    let mut used: HashSet<String> = HashSet::new();
     for (si, rel) in section_order.iter().enumerate() {
         let rel = rel.as_str().ok_or_else(|| CmdError::Failed(format!("sectionOrder[{si}] not a string")))?;
         if rel.contains("..") {
@@ -140,17 +134,38 @@ fn sync_ir_native(s: &mut Session, v: &Value) -> CmdResult {
         let path = dir.join(rel);
         let arr = read_json(&path)?;
         let arr = arr.as_array().ok_or_else(|| CmdError::Failed(format!("{rel}: expected array")))?;
-        for (bi, block) in arr.iter().enumerate() {
-            if blocks.len() >= MAX_IR_BLOCKS {
+        for block in arr {
+            if pending.len() >= MAX_IR_BLOCKS {
                 return Err(CmdError::Params(format!("at most {MAX_IR_BLOCKS} IR blocks")));
             }
             let id = p::str(block, "id").unwrap_or("").to_string();
-            if id.is_empty() {
-                return Err(CmdError::Params(format!("{rel}[{bi}]: missing id")));
+            if !id.is_empty() && !used.insert(id.clone()) {
+                return Err(CmdError::Params(format!("{rel}: duplicate id `{id}`")));
             }
-            let built = build_block(s, block, &dir)?;
-            blocks.push((id, built));
+            pending.push((rel.to_string(), id, block.clone()));
         }
+    }
+    let mut next = 1u32;
+    let mut blocks: Vec<(String, Block)> = Vec::new();
+    for (rel, id, block) in pending {
+        let id = if id.is_empty() {
+            let id = loop {
+                let cand = format!("b{next:04}");
+                next = next.saturating_add(1);
+                if next > 100_000 {
+                    return Err(CmdError::Params(format!("{rel}: could not assign a block id")));
+                }
+                if !used.contains(&cand) {
+                    break cand;
+                }
+            };
+            used.insert(id.clone());
+            id
+        } else {
+            id
+        };
+        let built = build_block(s, &block, &dir)?;
+        blocks.push((id, built));
     }
 
     s.doc.body.clear();
@@ -248,9 +263,7 @@ fn export_block(s: &Session, index: usize, id: &str, block: &Block, dir: &Path) 
             let style = para.props.style.clone().unwrap_or_else(|| "Normal".into());
             let text = para.plain_text();
             let pictures = picture_media(para);
-            let picture_only = !pictures.is_empty()
-                && pictures.len() == 1
-                && text.chars().all(|c| c == '\u{FFFC}' || c.is_whitespace());
+            let picture_only = !pictures.is_empty() && pictures.len() == 1 && text.chars().all(|c| c == '\u{FFFC}' || c.is_whitespace());
             if picture_only {
                 let media = &pictures[0];
                 let asset = write_asset(s, dir, id, media)?;
@@ -406,33 +419,26 @@ fn build_block(s: &mut Session, block: &Value, dir: &Path) -> Result<Block, CmdE
             Ok(Block::Para(para))
         }
         "table" => {
-            let grid = block
-                .get("cells")
-                .or_else(|| block.get("values"))
-                .and_then(Value::as_array)
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|row| row.as_array())
-                        .map(|cols| {
-                            cols.iter()
-                                .map(|c| match c {
-                                    Value::Null => String::new(),
-                                    Value::String(s) => s.clone(),
-                                    other => other.to_string().trim_matches('"').to_string(),
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .collect::<Vec<_>>()
-                });
+            let grid = block.get("cells").or_else(|| block.get("values")).and_then(Value::as_array).map(|rows| {
+                rows.iter()
+                    .filter_map(|row| row.as_array())
+                    .map(|cols| {
+                        cols.iter()
+                            .map(|c| match c {
+                                Value::Null => String::new(),
+                                Value::String(s) => s.clone(),
+                                other => other.to_string().trim_matches('"').to_string(),
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+            });
             let (rows, cols) = if let Some(ref g) = grid {
                 let rows = g.len().clamp(1, 1000);
                 let cols = g.iter().map(|r| r.len()).max().unwrap_or(1).clamp(1, 63);
                 (rows, cols)
             } else {
-                (
-                    p::u64(block, "rows").unwrap_or(2).clamp(1, 100) as usize,
-                    p::u64(block, "cols").unwrap_or(2).clamp(1, 63) as usize,
-                )
+                (p::u64(block, "rows").unwrap_or(2).clamp(1, 100) as usize, p::u64(block, "cols").unwrap_or(2).clamp(1, 63) as usize)
             };
             let width = p::f32(block, "width").unwrap_or(468.0).clamp(36.0, 1584.0);
             let mut t = Table::new(rows, cols, width);
@@ -487,16 +493,8 @@ fn append_picture(para: &mut Paragraph, s: &mut Session, dir: &Path, rel: &str, 
         h *= max_w / w;
         w = max_w;
     }
-    let obj = InlineObject::Image {
-        media: key,
-        w,
-        h,
-        alt: String::new(),
-        float: Default::default(),
-        crop: [0.0; 4],
-        fx: Default::default(),
-        ole: None,
-    };
+    let obj =
+        InlineObject::Image { media: key, w, h, alt: String::new(), float: Default::default(), crop: [0.0; 4], fx: Default::default(), ole: None };
     let at = para.len();
     para.insert_object(at, obj, &CharProps::default()).map_err(|e| CmdError::Failed(e.to_string()))?;
     Ok(())

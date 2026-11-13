@@ -2,7 +2,14 @@ use super::layout::touch_cells;
 use super::{CmdError, CmdResult, Document, Paragraph, Path, Pos, Session, StoryRef, Table, sel_result};
 
 pub(super) fn cell(s: &Session) -> Result<(Path, usize, usize), CmdError> {
-    s.sel.focus.path.cell().ok_or_else(|| CmdError::Disabled("the cursor isn't in a table".into()))
+    if let Some(found) = s.sel.focus.path.cell() {
+        return Ok(found);
+    }
+    let path = &s.sel.focus.path;
+    if s.doc.table(s.sel.focus.story, path).is_some() {
+        return Ok((path.clone(), 0, 0));
+    }
+    Err(CmdError::Disabled("the cursor isn't in a table".into()))
 }
 
 pub(super) fn with_table(s: &mut Session, f: impl Fn(&mut Table)) -> CmdResult {

@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"num"?: list id (default: the caret's list)} → {"num", "levels": [as list.define]}"#)
             .pure(),
         CommandSpec::new("list.multilevelPreset", "Multilevel List Library", "Home › Paragraph › Multilevel List", preset).params(
-            r#"{"preset": "headings" (1 / 1.1 / 1.1.1) | "article" (Article I. / Section 1.01 / (a)) | "outlineHeadings" (I. / A. / 1.) | "chapter" (Chapter 1, lower levels unnumbered)} — a new list whose nine levels are linked to Heading 1–9: every paragraph in those styles is numbered, selected paragraphs already in a Heading style keep it, and any other selected paragraph becomes Heading 1 (the first level)"#,
+            r#"{"preset": "headings" (1 / 1.1 / 1.1.1) | "article" (Article I. / Section 1.01 / (a)) | "outlineHeadings" (I. / A. / 1.) | "chapter" (Chapter 1, lower levels unnumbered), "apply"?: bool (default true)} — a new list whose nine levels are linked to Heading 1–9: every paragraph in those styles is numbered. apply true (default): selected paragraphs already in a Heading style keep it, and any other selected paragraph becomes Heading 1. apply false: only the styles are linked, the selection stays. A Heading that must show no number (ВВЕДЕНИЕ) takes numbering:null so it does not consume a number; para.restartNumbering on the next Heading starts that chapter at 1"#,
         ),
     ]
 }
@@ -303,18 +303,20 @@ fn preset(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     touch_styles(s, &linked)?;
-    super::para::fmt(s, &|pp| {
-        // A heading keeps its style and level; any other paragraph (Normal, Quote, Title…)
-        // becomes the first level's heading, Heading 1. The number comes from the style.
-        if !pp.style.as_ref().is_some_and(|st| linked.contains(st)) {
-            pp.style = linked.first().cloned();
-        }
-        pp.numbering = None;
-        pp.indent_left = None;
-        pp.indent_first = None;
-        pp.indent_left_chars = None;
-        pp.indent_first_chars = None;
-    })?;
+    if p::bool(v, "apply").unwrap_or(true) {
+        super::para::fmt(s, &|pp| {
+            // A heading keeps its style and level; any other paragraph (Normal, Quote, Title…)
+            // becomes the first level's heading, Heading 1. The number comes from the style.
+            if !pp.style.as_ref().is_some_and(|st| linked.contains(st)) {
+                pp.style = linked.first().cloned();
+            }
+            pp.numbering = None;
+            pp.indent_left = None;
+            pp.indent_first = None;
+            pp.indent_left_chars = None;
+            pp.indent_first_chars = None;
+        })?;
+    }
     let mut r = sel_result(s)?;
     r["num"] = json!(num);
     Ok(r)
@@ -553,6 +555,41 @@ mod tests {
         s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 2));
         s.run("list.multilevelPreset", &json!({"preset": "headings"})).unwrap();
         assert_eq!(numbered(&mut s), [n(Some("1"), "Heading1")]);
+    }
+
+    /// `apply: false` links Heading 1–9 and leaves the selection's style alone.
+    #[test]
+    fn a_heading_preset_can_link_styles_without_restyling_the_selection() {
+        let mut s = doc(&[("Body", "Normal")], 0, 0);
+        s.run("list.multilevelPreset", &json!({"preset": "headings", "apply": false})).unwrap();
+        assert_eq!(s.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.style.as_deref(), Some("Normal"));
+        assert!(s.doc.styles.get("Heading1").and_then(|st| st.para.numbering).is_some());
+    }
+
+    /// A Heading with numbering switched off does not take a chapter number, so the next Heading 1 is 1.
+    #[test]
+    fn a_heading_with_numbering_off_does_not_take_a_chapter_number() {
+        let mut s = headings("Heading1");
+        s.run("list.multilevelPreset", &json!({"preset": "headings", "apply": false})).unwrap();
+        let mut front = wordcraft_doc::Paragraph::with_text("Front", wordcraft_doc::CharProps::default());
+        front.props.style = Some("Heading1".into());
+        front.props.numbering = Some(wordcraft_doc::props::NumRef { num: 0, level: 0 });
+        s.doc.insert_block(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0), wordcraft_doc::Block::Para(front)).unwrap();
+        assert_eq!(numbered(&mut s), [n(None, "Heading1"), n(Some("1"), "Heading1"), n(Some("1.1"), "Heading2"), n(Some("2"), "Heading1")]);
+    }
+
+    /// The number on a heading preset lives on the style. Restart still sees it and starts this chapter at 1.
+    #[test]
+    fn restart_numbering_reads_a_style_linked_heading() {
+        let mut s = headings("Heading1");
+        s.run("list.multilevelPreset", &json!({"preset": "headings", "apply": false})).unwrap();
+        let mut front = wordcraft_doc::Paragraph::with_text("Front", wordcraft_doc::CharProps::default());
+        front.props.style = Some("Heading1".into());
+        s.doc.insert_block(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0), wordcraft_doc::Block::Para(front)).unwrap();
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+        assert!(s.doc.para_at(&s.sel.focus).unwrap().props.numbering.is_none());
+        s.run("para.restartNumbering", &json!({})).unwrap();
+        assert_eq!(numbered(&mut s), [n(Some("1"), "Heading1"), n(Some("1"), "Heading1"), n(Some("1.1"), "Heading2"), n(Some("2"), "Heading1")]);
     }
 
     /// #1793: one Undo takes the preset back: paragraph styles and the heading styles' numbers.

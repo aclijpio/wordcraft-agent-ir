@@ -20,6 +20,7 @@ mod tools;
 
 use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_props, tog};
 pub use format::{cur as selection_para, fmt, indent, outdent};
+pub(crate) use lists::restart_from;
 pub use lists::{ListButtons, list_buttons, manage_list, touch_all};
 use lists::{list, restart_numbering};
 pub(crate) use outline::{ensure_heading_style, set_heading};
@@ -177,7 +178,9 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"level": 0-8}"#),
-        CommandSpec::new("para.restartNumbering", "Restart at 1", "Home › Paragraph › Numbering", restart_numbering),
+        CommandSpec::new("para.restartNumbering", "Restart at 1", "Home › Paragraph › Numbering", restart_numbering).params(
+            r#"{} — the caret's list, including a heading whose number comes from its style (list.multilevelPreset). An earlier Heading with numbering:null does not consume a number; restart here makes this heading 1 and the following headings of that style continue"#,
+        ),
         CommandSpec::new("para.moveUp", "Move Paragraph Up", "Home › Paragraph", |s, _| move_paras(s, true))
             .key(if cfg!(target_os = "macos") { "Ctrl+Shift+Up" } else { "Alt+Shift+Up" }),
         CommandSpec::new("para.moveDown", "Move Paragraph Down", "Home › Paragraph", |s, _| move_paras(s, false))

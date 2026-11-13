@@ -76,12 +76,8 @@ fn parse_filter(v: &Value) -> IrFilter {
     let from = p::u64(v, "from").unwrap_or(0) as usize;
     let to = p::u64(v, "to").map(|x| x as usize).unwrap_or(usize::MAX);
     let page_breaks_only = p::bool(v, "pageBreaksOnly").unwrap_or(false);
-    let fields = v.get("fields").and_then(Value::as_array).map(|a| {
-        a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>()
-    });
-    let kinds = v.get("kinds").and_then(Value::as_array).map(|a| {
-        a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>()
-    });
+    let fields = v.get("fields").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>());
+    let kinds = v.get("kinds").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>());
     IrFilter { from, to, page_breaks_only, fields, kinds }
 }
 
@@ -123,8 +119,7 @@ fn build_ir(s: &mut Session, filter: &IrFilter) -> Value {
                     continue;
                 }
                 let text = para.plain_text();
-                let picture_only =
-                    has_picture && pictures.len() == 1 && text.chars().all(|c| c == '\u{FFFC}' || c.is_whitespace());
+                let picture_only = has_picture && pictures.len() == 1 && text.chars().all(|c| c == '\u{FFFC}' || c.is_whitespace());
                 let mut o = json!({
                     "index": i,
                     "type": if picture_only { "picture" } else { "paragraph" },
@@ -291,8 +286,7 @@ fn align_name(a: Align) -> &'static str {
 
 fn keep_fields(mut o: Value, fields: &[String]) -> Value {
     let Some(map) = o.as_object_mut() else { return o };
-    let keep: std::collections::HashSet<&str> =
-        fields.iter().map(String::as_str).chain(["index", "type", "id"]).collect();
+    let keep: std::collections::HashSet<&str> = fields.iter().map(String::as_str).chain(["index", "type", "id"]).collect();
     map.retain(|k, _| keep.contains(k.as_str()));
     o
 }

@@ -180,7 +180,8 @@ test source in File › Options › Language and on the bar's Install.
 | `select_text` | select the n-th occurrence of some text |
 | `get_text` / `inspect_document` | read the document back (verify without screenshots) |
 | `get_ir` | agent IR v2: paragraphs/tables/pictures, roles, indents, pages |
-| `apply_ir_patch` | structural patch (`update`/`replaceIn`/`insert`/`delete`/`move`/`setCell`/…); one undo |
+| `apply_ir_patch` | structural patch (`update`/`replace`/`replaceIn`/`insert`/`delete`/`move`/`setCell`/…); prefer `id` after export |
+| `export_ir` / `sync_ir` / `ir_path` | file IR v3 folder (`styles.json`, `sections/`, `assets/`) — **primary** for large drafts |
 | `apply_layout` | generic page/margins/Normal/Caption/Heading profile (optional `profile` object) |
 | `ensure_styles` | upsert stylesheet entries |
 | `apply_body_style` | alias of `apply_layout` |

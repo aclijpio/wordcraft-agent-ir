@@ -239,6 +239,26 @@ fn export_sync_ir_folder_round_trip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn apply_ir_patch_replace_table() {
+    let mut s = sample();
+    s.run(
+        "doc.applyIrPatch",
+        &json!({"ops":[{"op":"insert","index":1,"block":{"type":"table","cells":[["a","b"]],"header":true}}]}),
+    )
+    .unwrap();
+    s.run(
+        "doc.applyIrPatch",
+        &json!({"ops":[{"op":"replace","index":1,"block":{"type":"table","cells":[["H1","H2"],["c","d"]],"header":true,"style":"GridTable1Light"}}]}),
+    )
+    .unwrap();
+    let ir = s.run("doc.getIr", &json!({"kinds":["table"]})).unwrap();
+    let table = &ir["blocks"].as_array().unwrap()[0];
+    assert_eq!(table["cells"][0][0], "H1");
+    assert_eq!(table["cells"][1][1], "d");
+    assert_eq!(table["rows"], 2);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn ir_path_reports_folder() {

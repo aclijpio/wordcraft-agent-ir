@@ -242,21 +242,35 @@ fn plain_to_raw(para: &Paragraph, plain_off: usize) -> Option<usize> {
 
 fn apply_replace(s: &mut Session, index: usize, block: &Value) -> Result<(), CmdError> {
     let ty = p::str(block, "type").unwrap_or("paragraph");
-    if ty != "paragraph" {
-        return Err(CmdError::Params("v1 replace only supports paragraph blocks".into()));
+    let keep_id = p::str(block, "id").map(str::to_string).or_else(|| block_id_at(s, index));
+    match ty {
+        "paragraph" => {
+            let path = Path::top(index);
+            if s.doc.para(StoryRef::Body, &path).is_none() {
+                return Err(CmdError::Params(format!("block {index} is not a paragraph")));
+            }
+            let text = p::str(block, "text").unwrap_or("");
+            let style = p::str(block, "style").unwrap_or("Normal");
+            let mut set = block.clone();
+            if let Some(o) = set.as_object_mut() {
+                o.insert("text".into(), json!(text));
+                o.insert("style".into(), json!(style));
+            }
+            apply_update(s, index, &set)?;
+        }
+        "table" => {
+            let new_block = table_block_from_ir(block, "replace")?;
+            s.doc.remove_block(StoryRef::Body, &Path::top(index)).map_err(|e| CmdError::Failed(e.to_string()))?;
+            s.doc
+                .insert_block(StoryRef::Body, &Path::top(index), new_block)
+                .map_err(|e| CmdError::Failed(e.to_string()))?;
+            if let Some(id) = keep_id.as_deref() {
+                set_block_id(s, index, id)?;
+            }
+        }
+        other => return Err(CmdError::Params(format!("replace does not support type `{other}`"))),
     }
-    let path = Path::top(index);
-    if s.doc.para(StoryRef::Body, &path).is_none() {
-        return Err(CmdError::Params(format!("block {index} is not a paragraph")));
-    }
-    let text = p::str(block, "text").unwrap_or("");
-    let style = p::str(block, "style").unwrap_or("Normal");
-    let mut set = block.clone();
-    if let Some(o) = set.as_object_mut() {
-        o.insert("text".into(), json!(text));
-        o.insert("style".into(), json!(style));
-    }
-    apply_update(s, index, &set)
+    Ok(())
 }
 
 fn replace_in_paragraph(s: &mut Session, index: usize, find: &str, with: &str, occurrence: usize) -> Result<(), CmdError> {
@@ -316,58 +330,65 @@ fn apply_insert(s: &mut Session, op: &Value, i: usize) -> Result<usize, CmdError
             }
             Block::Para(para)
         }
-        "table" => {
-            // Prefer `cells` or `values` (rows of cell text). When either is set, rows/cols follow it.
-            let grid = block
-                .get("cells")
-                .or_else(|| block.get("values"))
-                .and_then(Value::as_array)
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|row| row.as_array())
-                        .map(|cols| {
-                            cols.iter()
-                                .map(|c| match c {
-                                    Value::Null => String::new(),
-                                    Value::String(s) => s.clone(),
-                                    other => other.to_string().trim_matches('"').to_string(),
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .collect::<Vec<_>>()
-                });
-            let (rows, cols) = if let Some(ref g) = grid {
-                let rows = g.len().clamp(1, 1000);
-                let cols = g.iter().map(|r| r.len()).max().unwrap_or(1).clamp(1, 63);
-                (rows, cols)
-            } else {
-                (
-                    p::u64(&block, "rows").unwrap_or(2).clamp(1, 100) as usize,
-                    p::u64(&block, "cols").unwrap_or(2).clamp(1, 63) as usize,
-                )
-            };
-            let width = p::f32(&block, "width").unwrap_or(468.0).clamp(36.0, 1584.0);
-            let mut t = Table::new(rows, cols, width);
-            if let Some(g) = grid {
-                for (r, row) in g.iter().enumerate().take(rows) {
-                    for (c, text) in row.iter().enumerate().take(cols) {
-                        if let Some(cell_mut) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) {
-                            *cell_mut = wordcraft_doc::table::Cell::with_text(text);
-                        }
-                    }
-                }
-            }
-            if p::bool(&block, "header").unwrap_or(false)
-                && let Some(first) = t.rows.get_mut(0)
-            {
-                first.props.header = true;
-            }
-            Block::Table(t)
-        }
+        "table" => table_block_from_ir(&block, &format!("ops[{i}]"))?,
         other => return Err(CmdError::Params(format!("ops[{i}]: unsupported insert type `{other}`"))),
     };
     s.doc.insert_block(StoryRef::Body, &Path::top(at), new_block).map_err(|e| CmdError::Failed(e.to_string()))?;
     Ok(at)
+}
+
+fn table_block_from_ir(block: &Value, ctx: &str) -> Result<Block, CmdError> {
+    let grid = block
+        .get("cells")
+        .or_else(|| block.get("values"))
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row.as_array())
+                .map(|cols| {
+                    cols.iter()
+                        .map(|c| match c {
+                            Value::Null => String::new(),
+                            Value::String(s) => s.clone(),
+                            other => other.to_string().trim_matches('"').to_string(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        });
+    let (rows, cols) = if let Some(ref g) = grid {
+        let rows = g.len().clamp(1, 1000);
+        let cols = g.iter().map(|r| r.len()).max().unwrap_or(1).clamp(1, 63);
+        (rows, cols)
+    } else {
+        (
+            p::u64(block, "rows").unwrap_or(2).clamp(1, 100) as usize,
+            p::u64(block, "cols").unwrap_or(2).clamp(1, 63) as usize,
+        )
+    };
+    if rows == 0 || cols == 0 {
+        return Err(CmdError::Params(format!("{ctx}: table needs rows and cols")));
+    }
+    let width = p::f32(block, "width").unwrap_or(468.0).clamp(36.0, 1584.0);
+    let mut t = Table::new(rows, cols, width);
+    if let Some(style) = p::str(block, "style") {
+        t.props.style = Some(style.to_string());
+    }
+    if let Some(g) = grid {
+        for (r, row) in g.iter().enumerate().take(rows) {
+            for (c, text) in row.iter().enumerate().take(cols) {
+                if let Some(cell_mut) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) {
+                    *cell_mut = wordcraft_doc::table::Cell::with_text(text);
+                }
+            }
+        }
+    }
+    if p::bool(block, "header").unwrap_or(false)
+        && let Some(first) = t.rows.get_mut(0)
+    {
+        first.props.header = true;
+    }
+    Ok(Block::Table(t))
 }
 
 fn move_block(s: &mut Session, from: usize, to: usize) -> Result<(), CmdError> {

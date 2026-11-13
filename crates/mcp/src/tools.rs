@@ -82,12 +82,13 @@ pub fn tool_definitions() -> Value {
         tool(
             "insert_table",
             "Insert filled table",
-            "Insert a table at the caret, filled from `values` in one call (an array of rows, each an array of cells; all rows the same length, up to 1000 rows and 63 columns). Set `header` to make the first row a repeating header row.",
+            "Insert a filled table (values[][]). Optional `index` sets the caret to that body block first (after collapsing any selection). For large drafts prefer export_ir → put type:table in sections/*.json → sync_ir instead of live insert.",
             with_doc(obj(
                 json!({
                     "values": {"type": "array", "description": "Rows of cells (text, numbers or booleans)", "items": {"type": "array", "items": {"type": ["string", "number", "boolean", "null"]}}},
                     "header": {"type": "boolean", "description": "First row is a header row that repeats on each page"},
-                    "style": s("Table style name (default GridTable1Light)")
+                    "style": s("Table style name (default GridTable1Light)"),
+                    "index": n("Body block index: caret goes to end of that paragraph before insert")
                 }),
                 &["values"]
             )),
@@ -203,14 +204,14 @@ pub fn tool_definitions() -> Value {
         tool(
             "export_ir",
             "Export IR folder",
-            "Write file-based Agent IR v3 next to the document ({stem}.wordcraft-ir/) or under profile/ir/{documentId}/: styles.json, sections/*.json, assets/. Stable block ids as bookmarks.",
+            "PRIMARY for large drafts: write Agent IR v3 folder ({stem}.wordcraft-ir/ or profile/ir/{documentId}/): styles.json, sections/*.json, assets/. Put tables and pictures in those files, then sync_ir — do not mix with live insert_table/insert_figure. Stable block ids as bookmarks.",
             with_doc(obj(json!({"path": s("Optional absolute IR folder path")}), &[])),
             false
         ),
         tool(
             "sync_ir",
             "Sync IR folder",
-            "Apply styles.json then rebuild body from sections (order + block ids). Use after editing IR files. Does not jump the viewport when run through the live app control channel.",
+            "Apply styles.json then rebuild body from sections (tables, pictures via assets/, captions). Use after editing IR files. Prefer this over live insert_table/insert_figure. Does not jump the viewport on the live control channel.",
             with_doc(obj(json!({"path": s("Optional absolute IR folder path")}), &[])),
             false
         ),
@@ -259,7 +260,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "insert_figure",
             "Insert figure",
-            "Insert a picture (path or base64 data) with optional caption/label/align. Optional body index for caret.",
+            "FALLBACK: insert picture at caret (or body `index`). For large drafts prefer export_ir → type:picture + asset in sections/assets → sync_ir. Never rely on select_text alone.",
             with_doc(obj(
                 json!({
                     "path": s("Image file path"),
@@ -437,8 +438,16 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         },
         "insert_table" => match a.get("values") {
             Some(values) => {
-                // Do not replace a non-collapsed selection (agents often still have a heading selected).
                 let _ = exec(b, "select.collapse", json!({"end": true}), doc);
+                if let Some(index) = a.get("index").and_then(Value::as_u64) {
+                    // Clamp puts an oversized off at the paragraph end (after a placeholder, if any).
+                    let _ = exec(
+                        b,
+                        "caret.set",
+                        json!({"pos": {"story": "body", "path": [index], "off": 1_000_000}}),
+                        doc,
+                    );
+                }
                 let mut params = json!({"values": values});
                 for k in ["header", "style"] {
                     if let Some(x) = a.get(k) {

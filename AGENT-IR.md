@@ -4,10 +4,11 @@ Fork of [storytold/wordcraft](https://github.com/storytold/wordcraft) with a **g
 
 ## Features
 
+- File IR v3: `doc.exportIr` / `doc.syncIr` / `doc.irPath` (styles catalog + sections + assets; **primary** for large drafts)
 - `doc.getIr` (v2) / MCP `get_ir`
-- `doc.applyIrPatch` — update / replaceIn / insert / delete / move / setStyle / setCell
+- `doc.applyIrPatch` — update / replace / replaceIn / insert / delete / move / setStyle / setCell (by `id` or `index`)
 - `doc.applyLayout` / `ensureStyles` / `ensureHeading`
-- `doc.insertFigure`, `insertToc`, `updateFields`, `insertCrossRef`, …
+- `doc.insertFigure`, `insertToc`, `updateFields`, `insertCrossRef`, … (fallback when no IR folder)
 - Cursor-oriented docs: [`docs/agent-ir.md`](docs/agent-ir.md)
 - Windows pack: [`packaging/agent-ir/README.md`](packaging/agent-ir/README.md)
 

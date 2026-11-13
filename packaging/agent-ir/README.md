@@ -52,10 +52,10 @@ Thesis-specific layout: local skill `profile.json` + `apply_layout` — not a bu
 
 ## File IR (large documents)
 
-Prefer folder IR over shipping the whole document through MCP:
+**Primary path** for thesis-sized drafts — do not hybrid with live table/figure inserts:
 
 1. `export_ir` → `{stem}.wordcraft-ir/` (`styles.json`, `sections/*.json`, `assets/`)
-2. Edit files (styles catalog separately; blocks only `style` + content + stable `id`)
+2. Edit files: paragraphs, **tables** (`type:"table"`, `cells`), **pictures** (`type:"picture"`, `asset`), Caption paragraphs; styles only in `styles.json`
 3. `sync_ir` (live app keeps the viewport; optional folder watch debounces sync)
 
-See `docs/agent-ir.md`.
+Live `insert_table` / `insert_figure` / `select_text` are fallback only (pass explicit `index`). See `docs/agent-ir.md` and `skills/wordcraft-vkr/SKILL.md`.
